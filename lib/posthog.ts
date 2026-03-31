@@ -61,9 +61,7 @@ export function classifyModule(url: string): string {
     if (path.includes('/sell-in') || path.includes('/sellin'))            return 'Sell-In'
     if (path.includes('/dashboard'))                                      return 'Custom Dashboards'
     if (path.includes('/home') || path === '/' || path === '')            return 'Home'
-    // Unknown: use first path segment so it's visible instead of lumped into "Other"
-    const first = path.split('/').find((s) => s.length > 0)
-    return first ? first.charAt(0).toUpperCase() + first.slice(1) : 'Home'
+    return 'Home'
   } catch {
     return 'Unknown'
   }
@@ -149,13 +147,13 @@ async function fetchUsersFromEvents(clientCode: string, days: number): Promise<U
 
 interface EventRow {
   email: string
-  url: string | null
+  module: string | null
   cnt: number
 }
 
 /**
- * Fetch pageview events grouped by (email, url) for a given period window.
- * Uses event-level properties (organization, user_email) — not person profiles.
+ * Fetch pageview events grouped by (email, module) for a given period window.
+ * Uses the custom event property `module` set by the app.
  * `sinceOffset` = 0 → last `days` days; `sinceOffset` = `days` → previous period.
  */
 async function fetchEventRows(clientCode: string, days: number, sinceOffset = 0): Promise<EventRow[]> {
@@ -163,19 +161,19 @@ async function fetchEventRows(clientCode: string, days: number, sinceOffset = 0)
   const rows = await hogqlQuery(`
     SELECT
       properties.user_email    AS email,
-      properties.$current_url  AS url,
+      properties.module        AS module,
       count()                  AS cnt
     FROM events
     WHERE event = '$pageview'
       AND properties.organization = '${safeCode}'
       AND timestamp >= now() - interval ${days + sinceOffset} day
       AND timestamp < now() - interval ${sinceOffset} day
-    GROUP BY email, url
+    GROUP BY email, module
   `)
   return rows.map((r) => ({
-    email: String(r[0] ?? ''),
-    url:   r[1] ? String(r[1]) : null,
-    cnt:   Number(r[2] ?? 0),
+    email:  String(r[0] ?? ''),
+    module: r[1] ? String(r[1]) : null,
+    cnt:    Number(r[2] ?? 0),
   }))
 }
 
@@ -229,10 +227,23 @@ export async function syncClientUsage(clientCode: string, days = 30): Promise<Us
     fetchSessionCounts(code, days, days),
   ])
 
-  // 5. Classify events
+  // 5. Classify events using the `module` property from PostHog
   let eventsExt = 0, eventsInt = 0
   let eventsExtPrev = 0, eventsIntPrev = 0
   const modulesMap: Record<string, number> = {}
+
+  // Map PostHog module property values to our display labels
+  const MODULE_PROP_MAP: Record<string, string> = {
+    sales:         'Sales',
+    buybox:        'BuyBox',
+    media:         'Media',
+    category:      'Category Explorer',
+    content:       'Content & SEO',
+    priceAndDeals: 'Price & Deals',
+    sellIn:        'Sell-In',
+    reports:       'Quick Wins',
+    voice:         'Customer Voice',
+  }
 
   for (const r of rows) {
     const internal = isInternalUser(r.email)
@@ -240,9 +251,11 @@ export async function syncClientUsage(clientCode: string, days = 30): Promise<Us
       eventsInt += r.cnt
     } else {
       eventsExt += r.cnt
-      if (r.url) {
-        const mod = classifyModule(r.url)
-        modulesMap[mod] = (modulesMap[mod] ?? 0) + r.cnt
+      if (r.module) {
+        const label = MODULE_PROP_MAP[r.module]
+        if (label) {
+          modulesMap[label] = (modulesMap[label] ?? 0) + r.cnt
+        }
       }
     }
   }

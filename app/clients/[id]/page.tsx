@@ -555,23 +555,26 @@ function ContractCard({ client }: { client: ClientWithStats }) {
   )
 }
 
-// ─── Modules (S-* subscriptions) ───────────────────────────────────
+// ─── Modules (products tag subscriptions) ───────────────────────────────────
 
-const S_MODULE_LABELS: Record<string, string> = {
-  s_home: 'Home',
-  s_quickwins: 'Quick Wins',
-  s_sales: 'Sales',
-  s_media: 'Media',
-  s_sell_in: 'Sell-in',
-  s_products: 'Products',
-  s_category: 'Category',
-  s_amc: 'AMC',
-  s_seller: 'Seller',
-}
+const PRODUCTS_MODULE_TAGS: { key: string; label: string; tags: string[] }[] = [
+  { key: 'home',        label: 'Home',              tags: ['S-Home'] },
+  { key: 'quickwins',   label: 'Quick Wins',        tags: ['S-QuickWins'] },
+  { key: 'sales',       label: 'Sales',             tags: ['S-Sales'] },
+  { key: 'media',       label: 'Media',             tags: ['S-Media', 'S-AMC'] },
+  { key: 'amc',         label: 'AMC',               tags: ['S-AMC'] },
+  { key: 'category',    label: 'Category',          tags: ['S-Category', 'S-Category+MS'] },
+  { key: 'seller',      label: 'Seller',            tags: ['S-Seller'] },
+  { key: 'sell_in',     label: 'Sell-In',           tags: ['S-Sell-In'] },
+  { key: 'product',     label: 'BuyBox/Content/Voice/Price', tags: ['S-Product'] },
+  { key: 'multiretail', label: 'Studio Multiretail',tags: ['SMR'] },
+]
 
 function SModulesCard({ client }: { client: ClientWithStats }) {
-  const entries = Object.entries(S_MODULE_LABELS)
-    .map(([key, label]) => ({ key, label, subscribed: (client[key as keyof ClientWithStats] as number | null) === 1 }))
+  const parts = (client.products ?? '').split(',').map((t) => t.trim().toLowerCase())
+  const entries = PRODUCTS_MODULE_TAGS.map(({ key, label, tags }) => ({
+    key, label, subscribed: tags.some((tag) => parts.includes(tag.toLowerCase())),
+  }))
   const hasAny = entries.some((e) => e.subscribed)
   if (!hasAny) return null
 
@@ -603,25 +606,26 @@ function SModulesCard({ client }: { client: ClientWithStats }) {
 type ModuleEntryDef = {
   key: string
   label: string
-  mondayField: keyof ClientWithStats | null
+  productsTags: string[]
   clerkCheck: ((m: Record<string, unknown>) => boolean) | null
   posthogPath: string | null
 }
 
 const MODULE_ENTRIES: ModuleEntryDef[] = [
-  { key: 'sales',     label: 'Sales',          mondayField: 's_sales',    clerkCheck: (m) => (m.sales as Record<string,unknown>)?.active === true,                                               posthogPath: 'Sales' },
-  { key: 'media',     label: 'Media',          mondayField: 's_media',    clerkCheck: (m) => (m.media as Record<string,unknown>)?.active === true,                                               posthogPath: 'Media' },
-  { key: 'dsp',       label: 'DSP',            mondayField: null,         clerkCheck: (m) => ((m.media as Record<string,unknown>)?.dsp as Record<string,unknown>)?.active === true,              posthogPath: 'DSP' },
-  { key: 'amc',       label: 'AMC',            mondayField: 's_amc',      clerkCheck: (m) => ((m.media as Record<string,unknown>)?.amc as Record<string,unknown>)?.active === true,              posthogPath: 'AMC' },
-  { key: 'category',  label: 'Category',       mondayField: 's_category', clerkCheck: (m) => (m.market as Record<string,unknown>)?.active === true,                                             posthogPath: 'Category Explorer' },
-  { key: 'seller',    label: 'Seller',         mondayField: 's_seller',   clerkCheck: (m) => (m.amazonAccountType as Record<string,unknown>)?.seller === true,                                  posthogPath: 'Seller' },
-  { key: 'buybox',    label: 'BuyBox',         mondayField: null,         clerkCheck: (m) => (m.retail as Record<string,unknown>)?.active === true,                                             posthogPath: null },
-  { key: 'price',     label: 'Price & Deals',  mondayField: null,         clerkCheck: (m) => (m.retail as Record<string,unknown>)?.active === true,                                             posthogPath: null },
-  { key: 'content',   label: 'Content & SEO',  mondayField: null,         clerkCheck: (m) => (m.retail as Record<string,unknown>)?.active === true,                                             posthogPath: null },
-  { key: 'voice',     label: 'Customer Voice', mondayField: null,         clerkCheck: (m) => (m.retail as Record<string,unknown>)?.active === true,                                             posthogPath: 'Customer Voice' },
-  { key: 'quickwins', label: 'Quick Wins',     mondayField: 's_quickwins',clerkCheck: null,                                                                                                     posthogPath: 'QuickWins' },
-  { key: 'sell_in',   label: 'Sell-In',        mondayField: 's_sell_in',  clerkCheck: null,                                                                                                     posthogPath: null },
-  { key: 'products',  label: 'Products',       mondayField: 's_products', clerkCheck: null,                                                                                                     posthogPath: null },
+  { key: 'sales',       label: 'Sales',              productsTags: ['S-Sales'],                      clerkCheck: (m) => (m.sales as Record<string,unknown>)?.active === true,                                               posthogPath: 'Sales' },
+  { key: 'media',       label: 'Media',              productsTags: ['S-Media', 'S-AMC'],             clerkCheck: (m) => (m.media as Record<string,unknown>)?.active === true,                                               posthogPath: 'Media' },
+  { key: 'dsp',         label: 'DSP',                productsTags: [],                               clerkCheck: (m) => ((m.media as Record<string,unknown>)?.dsp as Record<string,unknown>)?.active === true,              posthogPath: 'DSP' },
+  { key: 'amc',         label: 'AMC',                productsTags: ['S-AMC'],                        clerkCheck: (m) => ((m.media as Record<string,unknown>)?.amc as Record<string,unknown>)?.active === true,              posthogPath: 'AMC' },
+  { key: 'category',    label: 'Category',           productsTags: ['S-Category', 'S-Category+MS'],  clerkCheck: (m) => (m.market as Record<string,unknown>)?.active === true,                                             posthogPath: 'Category Explorer' },
+  { key: 'seller',      label: 'Seller',             productsTags: ['S-Seller'],                     clerkCheck: (m) => (m.amazonAccountType as Record<string,unknown>)?.seller === true,                                  posthogPath: 'Seller' },
+  { key: 'buybox',      label: 'BuyBox',             productsTags: ['S-Product'],                    clerkCheck: (m) => (m.retail as Record<string,unknown>)?.active === true,                                             posthogPath: 'BuyBox' },
+  { key: 'price',       label: 'Price & Deals',      productsTags: ['S-Product'],                    clerkCheck: (m) => (m.retail as Record<string,unknown>)?.active === true,                                             posthogPath: 'Price & Deals' },
+  { key: 'content',     label: 'Content & SEO',      productsTags: ['S-Product'],                    clerkCheck: (m) => (m.retail as Record<string,unknown>)?.active === true,                                             posthogPath: 'Content & SEO' },
+  { key: 'voice',       label: 'Customer Voice',     productsTags: ['S-Product'],                    clerkCheck: (m) => (m.retail as Record<string,unknown>)?.active === true,                                             posthogPath: 'Customer Voice' },
+  { key: 'quickwins',   label: 'Quick Wins',         productsTags: ['S-QuickWins'],                  clerkCheck: (m) => (m.reports as Record<string,unknown>)?.active === true,                                             posthogPath: 'Quick Wins' },
+  { key: 'sell_in',     label: 'Sell-In',            productsTags: ['S-Sell-In'],                    clerkCheck: (m) => (m.sellIn as Record<string,unknown>)?.active === true,                                              posthogPath: 'Sell-In' },
+  { key: 'multiretail', label: 'Studio Multiretail', productsTags: ['SMR'],                          clerkCheck: null,                                                                                                     posthogPath: null },
+  { key: 'home',        label: 'Home',               productsTags: ['__ALWAYS__'],                   clerkCheck: () => true,                                                                                               posthogPath: 'Home' },
 ]
 
 function getModuleSignal(paid: boolean, clerkEnabled: boolean | null, views: number): { label: string; color: string; icon: string } {
@@ -644,7 +648,11 @@ function ModuleComparisonCard({ client, clerkRawMetadata, posthogModules, clerkL
   clerkLoading: boolean
 }) {
   const entries = MODULE_ENTRIES.map((e) => {
-    const paid = e.mondayField ? ((client[e.mondayField] as number | null) ?? 0) > 0 : false
+    const paid = e.productsTags.includes('__ALWAYS__')
+      ? true
+      : e.productsTags.length > 0
+        ? e.productsTags.some((tag) => (client.products ?? '').split(',').map((t) => t.trim().toLowerCase()).includes(tag.toLowerCase()))
+        : false
     const clerkEnabled: boolean | null =
       clerkRawMetadata === null || e.clerkCheck === null
         ? null

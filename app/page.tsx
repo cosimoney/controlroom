@@ -227,6 +227,20 @@ export default function DashboardPage() {
     finally { setSyncingClerk(false) }
   }
 
+  const [syncingAll, setSyncingAll] = useState(false)
+  async function handleRefreshAll() {
+    setSyncingAll(true)
+    try {
+      await Promise.allSettled([
+        handleMondaySync(),
+        handleNotionSync(),
+        handlePostHogSync(),
+        handleClerkSync(),
+      ])
+      await fetchAll()
+    } finally { setSyncingAll(false) }
+  }
+
   const clientOptions = clients.map((c) => ({ value: String(c.id), label: c.name, sublabel: c.client_code ?? undefined }))
   const notionEnabled = stats.notionStatus === 'live'
   const colCount = 8
@@ -252,8 +266,8 @@ export default function DashboardPage() {
             <PostHogBadge status={stats.posthogStatus} lastSync={stats.lastPosthogSync} onSync={handlePostHogSync} syncing={syncingPH} />
             {/* Clerk badge */}
             <ClerkBadge status={stats.clerkStatus} lastSync={stats.lastClerkSync} onSync={handleClerkSync} syncing={syncingClerk} />
-            <button onClick={fetchAll} title="Ricarica" className="h-9 w-9 flex items-center justify-center rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
-              <RefreshCw className="h-4 w-4" />
+            <button onClick={handleRefreshAll} disabled={syncingAll} title="Sync tutto" className="h-9 w-9 flex items-center justify-center rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50">
+              <RefreshCw className={`h-4 w-4 ${syncingAll ? 'animate-spin' : ''}`} />
             </button>
             <Link href="/users" className="text-xs text-slate-400 hover:text-white transition-colors">Top Users</Link>
             <Link href="/modules" className="text-xs text-slate-400 hover:text-white transition-colors">Moduli</Link>
@@ -348,31 +362,20 @@ export default function DashboardPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="shrink-0 relative" style={{ width: '152px', minWidth: '152px' }}>
-              {/* Formatted display layer */}
-              <div
-                className="h-9 w-full rounded-md border px-3 flex items-center text-sm pointer-events-none select-none"
-                style={{
-                  borderColor: logDate ? 'rgba(99,102,241,0.5)' : '#334155',
-                  background: '#1e293b',
-                  color: logDate ? '#a5b4fc' : '#64748b',
-                }}
-              >
-                {logDate
-                  ? new Date(logDate + 'T12:00:00').toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' })
-                  : '📅 Oggi'}
-              </div>
-              {/* Invisible native input on top to capture clicks and open picker */}
-              <input
-                type="date"
-                max={today}
-                value={logDate}
-                onChange={(e) => setLogDate(e.target.value)}
-                className="absolute inset-0 opacity-0 cursor-pointer"
-                style={{ width: '100%', height: '100%' }}
-                title={logDate ? `Touchpoint del ${logDate}` : 'Data (default: oggi)'}
-              />
-            </div>
+            <input
+              type="date"
+              max={today}
+              value={logDate}
+              onChange={(e) => setLogDate(e.target.value)}
+              className="shrink-0 h-9 rounded-md border px-3 text-sm cursor-pointer outline-none focus:ring-2 focus:ring-indigo-500"
+              style={{
+                width: '152px',
+                borderColor: logDate ? 'rgba(99,102,241,0.5)' : '#334155',
+                background: '#1e293b',
+                color: logDate ? '#a5b4fc' : '#64748b',
+                colorScheme: 'dark',
+              }}
+            />
             <div className="flex-1 min-w-0">
               <input ref={notesRef} className="flex h-9 w-full rounded-md border px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500" style={{ borderColor: '#334155', background: '#1e293b', color: '#f1f5f9' }} placeholder="Note brevi (opzionale)..." value={logNotes} onChange={(e) => setLogNotes(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleQuickLog(e as unknown as React.FormEvent)} />
             </div>
@@ -580,7 +583,7 @@ function fmtRelative(iso: string | null): string {
   if (mins < 1) return 'Ora'
   if (mins < 60) return `${mins} min fa`
   const hrs = Math.floor(mins / 60)
-  if (hrs < 24) return `${hrs} ora fa`
+  if (hrs < 24) return `${hrs} ${hrs === 1 ? 'ora' : 'ore'} fa`
   return fmtSync(iso)
 }
 

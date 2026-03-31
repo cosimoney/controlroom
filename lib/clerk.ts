@@ -47,6 +47,8 @@ export function parseClerkModules(metadata: Record<string, unknown>): string[] {
   if (isActive(metadata.media))     modules.push('media')
   if (isActive(metadata.retail))    { modules.push('buybox'); modules.push('price'); modules.push('content'); modules.push('voice') }
   if (isActive(metadata.market))    modules.push('category')
+  if (isActive(metadata.reports))   modules.push('quickwins')
+  if (isActive(metadata.sellIn))    modules.push('sellin')
   if (isActive(metadata.beta))      modules.push('beta')
 
   const media = metadata.media as Record<string, unknown> | undefined
@@ -240,9 +242,16 @@ export async function syncAllClerk(): Promise<{ orgs: number; users: number; err
 
 export function getClerkOrgBySlug(slug: string): { org: ClerkOrgRow | null; users: ClerkUserRow[] } {
   const db  = getDb()
-  const org = db.prepare(
+  let org = db.prepare(
     `SELECT * FROM clerk_organizations WHERE LOWER(TRIM(slug)) = LOWER(TRIM(?))`
   ).get(slug) as ClerkOrgRow | undefined
+
+  // Fallback: try prefix match (e.g. client_code DISNA → slug disn)
+  if (!org) {
+    org = db.prepare(
+      `SELECT * FROM clerk_organizations WHERE LOWER(TRIM(?)) LIKE LOWER(TRIM(slug)) || '%' ORDER BY LENGTH(slug) DESC LIMIT 1`
+    ).get(slug) as ClerkOrgRow | undefined
+  }
 
   if (!org) return { org: null, users: [] }
 

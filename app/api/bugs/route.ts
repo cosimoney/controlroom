@@ -26,11 +26,9 @@ export async function GET(request: Request) {
 
   const rows = db.prepare(`
     SELECT b.*,
-           c.name AS client_name,
-           c.tier AS client_tier_num
+           (SELECT c.name FROM clients c WHERE LOWER(TRIM(c.client_code)) = LOWER(TRIM(b.reported_by)) ORDER BY c.id ASC LIMIT 1) AS client_name,
+           (SELECT c.tier FROM clients c WHERE LOWER(TRIM(c.client_code)) = LOWER(TRIM(b.reported_by)) ORDER BY c.id ASC LIMIT 1) AS client_tier_num
     FROM bugs b
-    LEFT JOIN clients c
-      ON LOWER(TRIM(b.reported_by)) = LOWER(TRIM(c.client_code))
     ${where}
     ORDER BY
       CASE b.priority WHEN 'Critical' THEN 1 WHEN 'High' THEN 2 WHEN 'Medium' THEN 3 ELSE 4 END,

@@ -10,9 +10,9 @@ export async function GET() {
   const { bugCount } = db.prepare('SELECT COUNT(*) as bugCount FROM bugs').get() as { bugCount: number }
   const hasBugData = bugCount > 0
 
-  // Check if any PostHog cache exists (30d summary)
-  const hasPostHogData = isPostHogConfigured() && !!(db.prepare(
-    "SELECT 1 FROM posthog_usage_cache WHERE metric_type='summary' AND user_type='all' LIMIT 1",
+  // Check if any PostHog cache exists (matches stats/route.ts logic)
+  const hasPostHogData = !!(db.prepare(
+    "SELECT 1 FROM posthog_usage_cache WHERE metric_type='summary' LIMIT 1",
   ).get())
 
   const rows = db.prepare(`
@@ -48,7 +48,7 @@ export async function GET() {
       GROUP BY LOWER(TRIM(reported_by))
     ) br ON LOWER(TRIM(c.client_code)) = br.rby
     LEFT JOIN posthog_usage_cache phc
-      ON phc.client_code = c.client_code
+      ON LOWER(TRIM(phc.client_code)) = LOWER(TRIM(c.client_code))
      AND phc.metric_type = 'summary'
      AND phc.user_type   = 'all'
      AND phc.period_days = 30

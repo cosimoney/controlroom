@@ -147,7 +147,7 @@ export default function ModulesPage() {
                       </td>
                       <td className="px-3 py-2 text-slate-300">{a.module_label}</td>
                       <td className="px-3 py-2 text-center">
-                        {a.monday_value === 1 ? <span className="text-green-400">✓</span> : <span className="text-slate-600">—</span>}
+                        {(a.monday_value ?? 0) > 0 ? <span className="text-green-400">✓</span> : <span className="text-slate-600">—</span>}
                       </td>
                       <td className="px-3 py-2 text-center">
                         {a.clerk_enabled === null

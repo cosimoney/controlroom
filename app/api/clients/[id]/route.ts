@@ -43,7 +43,7 @@ export async function GET(_req: Request, { params }: { params: Params }) {
       GROUP BY LOWER(TRIM(reported_by))
     ) br ON LOWER(TRIM(c.client_code)) = br.rby
     LEFT JOIN posthog_usage_cache phc
-      ON phc.client_code = c.client_code
+      ON LOWER(TRIM(phc.client_code)) = LOWER(TRIM(c.client_code))
      AND phc.metric_type = 'summary'
      AND phc.user_type   = 'all'
      AND phc.period_days = 30

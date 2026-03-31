@@ -1,44 +1,53 @@
 /**
  * lib/modules.ts — Module cross-system mapping and signal logic
  *
- * Links Monday subscription data (s_* fields), Clerk enabled modules,
+ * Links Monday subscription data (products text column tags), Clerk enabled modules,
  * and PostHog usage (classifyModule() output) into a unified comparison.
- *
- * TODO: verify posthog_path values against real Studio URL structure after
- *       first Clerk sync. Current values are based on classifyModule() in posthog.ts.
  */
 
 import type { ModuleComparisonEntry, ModuleSignalType } from './types'
-import type { ClientWithStats } from './types'
 
 export interface ModuleMapEntry {
   label: string
-  monday_field: keyof ClientWithStats | null
+  products_tags: string[]     // tags to match in Monday `products` column (comma-separated)
   clerk_key: string | null    // key in parseClerkModules() output
   posthog_path: string | null // module name returned by classifyModule()
 }
 
-// TODO: verify posthog_path values against real Studio URL structure
+/**
+ * Returns true if any of the given tags appear in the comma-separated `products` string.
+ * Matching is case-insensitive and trims whitespace.
+ */
+export function hasProductTag(products: string | null | undefined, tags: string[]): boolean {
+  if (tags.includes('__ALWAYS__')) return true
+  if (!products || tags.length === 0) return false
+  const parts = products.split(',').map((t) => t.trim().toLowerCase())
+  return tags.some((tag) => parts.includes(tag.toLowerCase()))
+}
+
 export const MODULE_CROSS_MAP: Record<string, ModuleMapEntry> = {
-  home:     { label: 'Home',       monday_field: 's_home',     clerk_key: null,       posthog_path: 'Other' },
-  quickwins:{ label: 'Quick Wins', monday_field: 's_quickwins',clerk_key: null,       posthog_path: 'QuickWins' },
-  sales:    { label: 'Sales',      monday_field: 's_sales',    clerk_key: 'sales',    posthog_path: 'Sales' },
-  media:    { label: 'Media',      monday_field: 's_media',    clerk_key: 'media',    posthog_path: 'Media' },
-  dsp:      { label: 'DSP',        monday_field: null,         clerk_key: 'dsp',      posthog_path: 'DSP' },
-  amc:      { label: 'AMC',        monday_field: 's_amc',      clerk_key: 'amc',      posthog_path: 'AMC' },
-  category: { label: 'Category',   monday_field: 's_category', clerk_key: 'category', posthog_path: 'Category Explorer' },
-  seller:   { label: 'Seller',     monday_field: 's_seller',   clerk_key: 'seller',   posthog_path: 'Seller' },
-  sell_in:  { label: 'Sell-In',    monday_field: 's_sell_in',  clerk_key: null,       posthog_path: 'Other' },
-  products: { label: 'Products',   monday_field: 's_products', clerk_key: null,       posthog_path: 'Other' },
+  sales:       { label: 'Sales',              products_tags: ['S-Sales'],                      clerk_key: 'sales',    posthog_path: 'Sales' },
+  media:       { label: 'Media',              products_tags: ['S-Media', 'S-AMC'],             clerk_key: 'media',    posthog_path: 'Media' },
+  dsp:         { label: 'DSP',                products_tags: [],                               clerk_key: 'dsp',      posthog_path: 'DSP' },
+  amc:         { label: 'AMC',                products_tags: ['S-AMC'],                        clerk_key: 'amc',      posthog_path: 'AMC' },
+  category:    { label: 'Category',           products_tags: ['S-Category', 'S-Category+MS'],  clerk_key: 'category', posthog_path: 'Category Explorer' },
+  seller:      { label: 'Seller',             products_tags: ['S-Seller'],                     clerk_key: 'seller',   posthog_path: 'Seller' },
+  buybox:      { label: 'BuyBox',             products_tags: ['S-Product'],                    clerk_key: 'buybox',   posthog_path: 'BuyBox' },
+  content:     { label: 'Content & SEO',      products_tags: ['S-Product'],                    clerk_key: 'content',  posthog_path: 'Content & SEO' },
+  voice:       { label: 'Customer Voice',     products_tags: ['S-Product'],                    clerk_key: 'voice',    posthog_path: 'Customer Voice' },
+  price:       { label: 'Price & Deals',      products_tags: ['S-Product'],                    clerk_key: 'price',    posthog_path: 'Price & Deals' },
+  quickwins:   { label: 'Quick Wins',         products_tags: ['S-QuickWins'],                  clerk_key: 'quickwins',posthog_path: 'Quick Wins' },
+  sell_in:     { label: 'Sell-In',            products_tags: ['S-Sell-In'],                    clerk_key: 'sellin',   posthog_path: 'Sell-In' },
+  multiretail: { label: 'Studio Multiretail', products_tags: ['SMR'],                          clerk_key: null,       posthog_path: null },
+  home:        { label: 'Home',               products_tags: ['__ALWAYS__'],                   clerk_key: '__ALWAYS__', posthog_path: 'Home' },
 }
 
 export function getModuleSignal(
-  monday_value: number | null,
+  subscribed: boolean,
   clerk_enabled: boolean | null,
   posthog_views: number,
 ): ModuleSignalType {
-  const subscribed = monday_value === 1
-  const used       = posthog_views > 0
+  const used = posthog_views > 0
 
   if (!subscribed && !used) return 'grey'
   if (!subscribed && used)  return 'upsell'
@@ -54,14 +63,13 @@ export function getModuleSignal(
 }
 
 export function buildModuleComparison(
-  client: ClientWithStats,
+  products: string | null,
   clerkModules: string[] | null,  // null = no Clerk data
   posthogModules: Record<string, number>,  // from UsageSummary.modules
 ): ModuleComparisonEntry[] {
   return Object.entries(MODULE_CROSS_MAP).map(([key, entry]) => {
-    const monday_value = entry.monday_field
-      ? (client[entry.monday_field] as number | null) ?? null
-      : null
+    const subscribed = hasProductTag(products, entry.products_tags)
+    const monday_value = subscribed ? 1 : 0
 
     const clerk_enabled = clerkModules === null
       ? null
@@ -73,9 +81,9 @@ export function buildModuleComparison(
       ? posthogModules[entry.posthog_path]
       : 0
 
-    const signal = getModuleSignal(monday_value, clerk_enabled, posthog_views)
+    const signal = getModuleSignal(subscribed, clerk_enabled, posthog_views)
 
     return { key, label: entry.label, monday_value, clerk_enabled, posthog_views, signal }
-  }).filter((e) => e.signal !== 'grey' || e.monday_value === 1)
+  }).filter((e) => e.signal !== 'grey' || e.monday_value > 0)
   // Only show modules that are subscribed OR have some activity
 }

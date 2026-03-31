@@ -1,19 +1,16 @@
 import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
-import { getModuleSignal, MODULE_CROSS_MAP } from '@/lib/modules'
-import type { ClientWithStats } from '@/lib/types'
+import { getModuleSignal, MODULE_CROSS_MAP, hasProductTag } from '@/lib/modules'
 
 export async function GET() {
   const db = getDb()
 
-  // Load all active clients with Monday s_* fields
+  // Load all active clients with products column
   const clients = db.prepare(`
-    SELECT id, name, client_code, tier, arr,
-      s_home, s_quickwins, s_sales, s_media, s_sell_in,
-      s_products, s_category, s_amc, s_seller
+    SELECT id, name, client_code, tier, arr, products
     FROM clients
     WHERE status = 'active' AND client_code IS NOT NULL
-  `).all() as (ClientWithStats & { client_code: string })[]
+  `).all() as { id: number; name: string; client_code: string; tier: number | null; arr: number | null; products: string | null }[]
 
   // Load Clerk org modules (keyed by lowercase slug)
   const clerkOrgs = db.prepare(`
@@ -38,18 +35,27 @@ export async function GET() {
 
   for (const client of clients) {
     const code         = client.client_code.toLowerCase()
-    const clerkModules = clerkMap.get(code) ?? null
+    let clerkModules   = clerkMap.get(code) ?? null
+    // Fallback: find slug that is a prefix of client_code (e.g. disn → disna)
+    if (clerkModules === null) {
+      for (const [slug, mods] of clerkMap) {
+        if (code.startsWith(slug)) { clerkModules = mods; break }
+      }
+    }
     const phModules    = phMap.get(code) ?? {}
 
     for (const [key, entry] of Object.entries(MODULE_CROSS_MAP)) {
-      const monday_value   = entry.monday_field ? (client[entry.monday_field as keyof typeof client] as number | null) ?? null : null
-      const clerk_enabled  = clerkModules === null
-        ? null
-        : entry.clerk_key !== null ? clerkModules.includes(entry.clerk_key) : null
+      const subscribed     = hasProductTag(client.products, entry.products_tags)
+      const monday_value   = subscribed ? 1 : 0
+      const clerk_enabled  = entry.clerk_key === '__ALWAYS__'
+        ? true
+        : clerkModules === null
+          ? null
+          : entry.clerk_key !== null ? clerkModules.includes(entry.clerk_key) : null
       const posthog_views  = entry.posthog_path && phModules[entry.posthog_path]
         ? phModules[entry.posthog_path]
         : 0
-      const signal         = getModuleSignal(monday_value, clerk_enabled, posthog_views)
+      const signal         = getModuleSignal(subscribed, clerk_enabled, posthog_views)
 
       if (signal !== 'grey') {
         alerts.push({

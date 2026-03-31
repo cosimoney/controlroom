@@ -268,11 +268,11 @@ export function upsertMondayRows(rows: Record<string, unknown>[]): MondaySyncRes
 interface MondayItem {
   id: string
   name: string
-  column_values: { id: string; text: string }[]
+  column_values: { id: string; text: string; display_value?: string }[]
 }
 
 interface MondayBoardPage {
-  columns: { id: string; title: string }[]
+  columns: { id: string; title: string; type: string }[]
   items_page: { cursor?: string; items: MondayItem[] }
 }
 
@@ -283,13 +283,13 @@ async function fetchMondayFirstPage(): Promise<{
 }> {
   const query = `query {
     boards(ids: [${process.env.MONDAY_BOARD_ID}]) {
-      columns { id title }
+      columns { id title type }
       items_page(limit: 500) {
         cursor
         items {
           id
           name
-          column_values { id text }
+          column_values { id text ... on MirrorValue { display_value } }
         }
       }
     }
@@ -325,7 +325,7 @@ async function fetchMondayNextPage(cursor: string): Promise<{ items: MondayItem[
       items {
         id
         name
-        column_values { id text }
+        column_values { id text ... on MirrorValue { display_value } }
       }
     }
   }`
@@ -355,7 +355,10 @@ function mondayItemToRow(item: MondayItem, colMap: Map<string, string>): Record<
   const row: Record<string, unknown> = { Name: item.name }
   for (const col of item.column_values) {
     const title = colMap.get(col.id)
-    if (title && col.text !== undefined) row[title] = col.text
+    if (!title) continue
+    // Mirror columns return text=null but have display_value
+    const value = col.text ?? col.display_value ?? null
+    if (value !== undefined) row[title] = value
   }
   return row
 }

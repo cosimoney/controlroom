@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { getDb, getSyncMetadata } from '@/lib/db'
 import { calculateHealthScore, calculatePriorityScore, getDaysSince } from '@/lib/health'
-import { isPostHogConfigured } from '@/lib/posthog'
+import { isPostHogConfigured, usageScoreFromSummary } from '@/lib/posthog'
+import type { UsageSummary } from '@/lib/types'
 import { getMondayStatus } from '@/lib/services/monday.service'
 
 export async function GET() {
@@ -37,6 +38,13 @@ export async function GET() {
     : []
   const bugMap = new Map(bugRows.map((r) => [r.rby, r]))
 
+  // PostHog usage cache for score alignment
+  const phRows = db.prepare(`
+    SELECT client_code, value FROM posthog_usage_cache
+    WHERE metric_type = 'summary' AND user_type = 'all' AND period_days = 30
+  `).all() as { client_code: string; value: string }[]
+  const phMap = new Map(phRows.map((r) => [r.client_code?.toLowerCase().trim(), r.value]))
+
   const totalActive = activeClients.length
   let toContact = 0
   let critical = 0
@@ -46,13 +54,19 @@ export async function GET() {
     if (days === null || days > 30) toContact++
     if (days === null || days > 60) critical++
 
-    // Compute priority score for tier1AtRisk
+    // Compute priority score identical to /api/clients (includes PostHog usage)
     const bugData = bugMap.get(c.client_code?.toLowerCase().trim() ?? '')
+    const phRaw = phMap.get(c.client_code?.toLowerCase().trim() ?? '')
+    let usageScore: number | null = null
+    if (phRaw) {
+      try { usageScore = usageScoreFromSummary(JSON.parse(phRaw) as UsageSummary) } catch { /* ignore */ }
+    }
     const rawScore = calculateHealthScore(
       c.last_touchpoint_date,
       c.last_touchpoint_type,
-      hasBugDataEarly && bugData ? { open: bugData.open_count, critical: bugData.critical_count, high: bugData.high_count, resolved: bugData.resolved_count } : null,
+      hasBugDataEarly ? { open: bugData?.open_count ?? 0, critical: bugData?.critical_count ?? 0, high: bugData?.high_count ?? 0, resolved: bugData?.resolved_count ?? 0 } : null,
       hasBugDataEarly,
+      usageScore,
     )
     const { priorityScore } = calculatePriorityScore(rawScore, c.tier)
     if ((c.tier ?? 3) === 1 && priorityScore < 60) tier1AtRisk++
@@ -80,7 +94,7 @@ export async function GET() {
   const monthStr = thisMonthStart.toISOString().split('T')[0]
   const { bugsResolvedThisMonth } = db.prepare(`
     SELECT COUNT(*) as bugsResolvedThisMonth FROM bugs
-    WHERE status IN ('Fixed', 'Closed') AND date_reported >= ?
+    WHERE status IN ('Fixed', 'Closed') AND COALESCE(due_date, date_reported) >= ?
   `).get(monthStr) as { bugsResolvedThisMonth: number }
 
   // Notion status

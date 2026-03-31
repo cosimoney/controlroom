@@ -186,7 +186,8 @@ export function calculatePriorityScore(
 ): { priorityScore: number; penalty: number } {
   const t = tier ?? 3
   if (rawScore >= 60) return { priorityScore: rawScore, penalty: 0 }
-  const penalty = 0
+  // Below 60: Tier 1 gets -10, Tier 2 gets -5, Tier 3 no penalty
+  const penalty = t === 1 ? 10 : t === 2 ? 5 : 0
   return { priorityScore: Math.max(0, rawScore - penalty), penalty }
 }
 
