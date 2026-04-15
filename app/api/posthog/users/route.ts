@@ -27,8 +27,9 @@ export async function GET(request: Request) {
   const org  = searchParams.get('org') ?? null
 
   const orgFilter = org ? `AND properties.organization = '${org.replace(/'/g, "\\'")}'` : ''
-  const orgExclude = `AND properties.organization IS NOT NULL AND properties.organization != '' AND properties.organization != 'empty'`
+  const orgExclude = `AND properties.organization IS NOT NULL AND properties.organization != '' AND properties.organization NOT IN ('empty', 'sign-in')`
 
+  // Main user metrics + session duration in a single query using a subquery for avg duration
   const rows = await hogql(`
     SELECT
       properties.user_email     AS email,
@@ -47,6 +48,37 @@ export async function GET(request: Request) {
     ORDER BY sessions DESC
     LIMIT 200
   `)
+
+  // Fetch average session duration per (email, org) — derived from min/max timestamp per session_id
+  const durationRows = await hogql(`
+    SELECT
+      email,
+      org,
+      avg(duration) AS avg_duration
+    FROM (
+      SELECT
+        properties.user_email AS email,
+        properties.organization AS org,
+        properties.$session_id AS sid,
+        dateDiff('second', min(timestamp), max(timestamp)) AS duration
+      FROM events
+      WHERE event = '$pageview'
+        AND timestamp >= now() - interval ${days} day
+        AND properties.user_email IS NOT NULL
+        AND properties.user_email != ''
+        AND properties.$session_id IS NOT NULL
+        ${orgExclude}
+        ${orgFilter}
+      GROUP BY email, org, sid
+      HAVING duration > 0
+    )
+    GROUP BY email, org
+  `)
+  const durationMap = new Map<string, number>()
+  for (const r of durationRows) {
+    const key = `${String(r[0] ?? '').toLowerCase()}|${String(r[1] ?? '').toLowerCase()}`
+    durationMap.set(key, Math.round(Number(r[2] ?? 0)))
+  }
 
   // Enrich with client data (name, tier) from SQLite
   const db = getDb()
@@ -67,6 +99,7 @@ export async function GET(request: Request) {
     const client     = clientMap.get(orgCode.toLowerCase()) ?? null
     const isInternal = email.includes('witailer') || email.includes('retex') || email.includes('alkemy')
 
+    const durationKey = `${email.toLowerCase()}|${orgCode.toLowerCase()}`
     return {
       email,
       org: orgCode,
@@ -75,6 +108,7 @@ export async function GET(request: Request) {
       tier:        client?.tier ?? null,
       sessions,
       pageviews,
+      avg_session_seconds: durationMap.get(durationKey) ?? 0,
       last_seen,
       is_internal: isInternal,
     }

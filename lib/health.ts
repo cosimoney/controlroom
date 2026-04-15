@@ -73,7 +73,7 @@ export function computeUsageScore(adoptionLevel: AdoptionLevel, lastSeenExternal
   const base: Record<AdoptionLevel, number> = {
     'Self-serve': 100,
     'Supported':  75,
-    'PM-driven':  40,
+    'PM-driven':  20,
     'Dormant':    10,
     'New':        50,
   }

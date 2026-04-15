@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getDb } from '@/lib/db'
-import { calculateHealthScore, calculatePriorityScore, getDaysSince } from '@/lib/health'
+import { calculateHealthScore, calculateBugScore, calculatePriorityScore, getDaysSince } from '@/lib/health'
 import { isPostHogConfigured, usageScoreFromSummary, daysSince as phDaysSince } from '@/lib/posthog'
 import type { UsageSummary } from '@/lib/types'
 
@@ -24,7 +24,11 @@ export async function GET() {
            COALESCE(bo.critical_count, 0) AS critical_bugs,
            COALESCE(bo.high_count,     0) AS high_bugs,
            COALESCE(br.resolved_count, 0) AS resolved_bugs,
-           phc.value         AS phc_value
+           phc.value         AS phc_value,
+           COALESCE(
+             (SELECT co.external_members FROM clerk_organizations co WHERE LOWER(TRIM(co.slug)) = LOWER(TRIM(c.client_code)) LIMIT 1),
+             (SELECT co.external_members FROM clerk_organizations co WHERE LOWER(TRIM(c.client_code)) LIKE LOWER(TRIM(co.slug)) || '%' AND LENGTH(co.slug) >= 4 ORDER BY LENGTH(co.slug) DESC LIMIT 1)
+           ) AS clerk_external_members
     FROM clients c
     LEFT JOIN touchpoints tp ON tp.id = (
       SELECT id FROM touchpoints
@@ -62,19 +66,31 @@ export async function GET() {
       try { phData = JSON.parse(c.phc_value as string) as UsageSummary } catch { /* ignore */ }
     }
 
-    const usageScore = phData ? usageScoreFromSummary(phData) : null
-    const rawScore = calculateHealthScore(
-      c.last_touchpoint_date as string | null,
-      c.last_touchpoint_type as string | null,
-      hasBugData ? {
-        open:     c.open_bugs as number,
-        critical: c.critical_bugs as number,
-        high:     c.high_bugs as number,
-        resolved: c.resolved_bugs as number,
-      } : null,
-      hasBugData,
-      usageScore,
-    )
+    const clerkHasExternal = (c.clerk_external_members as number | null) != null && (c.clerk_external_members as number) > 0
+    const isInternalUse = !!phData && phData.adoption_level === 'PM-driven' && !clerkHasExternal
+    let usageScore = phData ? usageScoreFromSummary(phData) : null
+    // Internal-use clients: neutralize usage and recency — managed internally by PMs
+    if (usageScore !== null && isInternalUse) {
+      usageScore = 50
+    }
+    const bugInfo = hasBugData ? {
+      open:     c.open_bugs as number,
+      critical: c.critical_bugs as number,
+      high:     c.high_bugs as number,
+      resolved: c.resolved_bugs as number,
+    } : null
+    const rawScore = isInternalUse
+      ? Math.round(
+          0.50 * (bugInfo ? calculateBugScore(bugInfo.open, bugInfo.critical, bugInfo.high, bugInfo.resolved) : 100)
+          + 0.50 * (usageScore ?? 50)
+        )
+      : calculateHealthScore(
+          c.last_touchpoint_date as string | null,
+          c.last_touchpoint_type as string | null,
+          bugInfo,
+          hasBugData,
+          usageScore,
+        )
     const { priorityScore, penalty } = calculatePriorityScore(rawScore, c.tier as number | null)
 
     return {
@@ -92,6 +108,7 @@ export async function GET() {
       last_seen_external_days: phData ? phDaysSince(phData.last_seen_external?.last_seen_at ?? null) : null,
       last_seen_internal_days: phData ? phDaysSince(phData.last_seen_internal?.last_seen_at ?? null) : null,
       has_posthog_data:        !!phData,
+      clerk_has_external:      (c.clerk_external_members as number | null) != null && (c.clerk_external_members as number) > 0,
     }
   })
 

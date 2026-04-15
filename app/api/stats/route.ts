@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getDb, getSyncMetadata } from '@/lib/db'
-import { calculateHealthScore, calculatePriorityScore, getDaysSince } from '@/lib/health'
+import { calculateHealthScore, calculateBugScore, calculatePriorityScore, getDaysSince } from '@/lib/health'
 import { isPostHogConfigured, usageScoreFromSummary } from '@/lib/posthog'
 import type { UsageSummary } from '@/lib/types'
 import { getMondayStatus } from '@/lib/services/monday.service'
@@ -10,7 +10,7 @@ export async function GET() {
 
   // Active clients with last touchpoint
   const activeClients = db.prepare(`
-    SELECT c.id, c.client_code, c.tier,
+    SELECT c.id, c.client_code, c.tier, c.arr,
            tp.date AS last_touchpoint_date,
            tp.type AS last_touchpoint_type
     FROM clients c
@@ -19,7 +19,7 @@ export async function GET() {
       ORDER BY date DESC, created_at DESC LIMIT 1
     )
     WHERE c.status = 'active'
-  `).all() as { id: number; client_code: string | null; tier: number | null; last_touchpoint_date: string | null; last_touchpoint_type: string | null }[]
+  `).all() as { id: number; client_code: string | null; tier: number | null; arr: number | null; last_touchpoint_date: string | null; last_touchpoint_type: string | null }[]
 
   const { bugCount } = db.prepare('SELECT COUNT(*) as bugCount FROM bugs').get() as { bugCount: number }
   const hasBugDataEarly = bugCount > 0
@@ -45,29 +45,54 @@ export async function GET() {
   `).all() as { client_code: string; value: string }[]
   const phMap = new Map(phRows.map((r) => [r.client_code?.toLowerCase().trim(), r.value]))
 
+  // Clerk external members lookup
+  const clerkOrgs = db.prepare('SELECT slug, external_members FROM clerk_organizations').all() as { slug: string; external_members: number }[]
+  const clerkExtMap = new Map(clerkOrgs.map((o) => [o.slug.toLowerCase(), o.external_members]))
+
   const totalActive = activeClients.length
   let toContact = 0
   let critical = 0
   let tier1AtRisk = 0
   for (const c of activeClients) {
+    const code = c.client_code?.toLowerCase().trim() ?? ''
     const days = getDaysSince(c.last_touchpoint_date)
-    if (days === null || days > 30) toContact++
-    if (days === null || days > 60) critical++
+
+    // Skip internal-use clients from touchpoint counters
+    const cClerkExt = clerkExtMap.get(code) ?? (() => { for (const [slug, ext] of clerkExtMap) { if (code.startsWith(slug)) return ext } return null })()
+    const isInternalUse = phMap.has(code) && !(cClerkExt != null && cClerkExt > 0)
+    const isLowArr = (c.arr ?? 0) < 3000
+    if (!isInternalUse) {
+      if (days === null || days > 30) toContact++
+      if (!isLowArr && (days === null || days > 60)) critical++
+    }
 
     // Compute priority score identical to /api/clients (includes PostHog usage)
-    const bugData = bugMap.get(c.client_code?.toLowerCase().trim() ?? '')
-    const phRaw = phMap.get(c.client_code?.toLowerCase().trim() ?? '')
+    const bugData = bugMap.get(code)
+    const phRaw = phMap.get(code)
     let usageScore: number | null = null
+    let phSummary: UsageSummary | null = null
     if (phRaw) {
-      try { usageScore = usageScoreFromSummary(JSON.parse(phRaw) as UsageSummary) } catch { /* ignore */ }
+      try { phSummary = JSON.parse(phRaw) as UsageSummary; usageScore = usageScoreFromSummary(phSummary) } catch { /* ignore */ }
     }
-    const rawScore = calculateHealthScore(
-      c.last_touchpoint_date,
-      c.last_touchpoint_type,
-      hasBugDataEarly ? { open: bugData?.open_count ?? 0, critical: bugData?.critical_count ?? 0, high: bugData?.high_count ?? 0, resolved: bugData?.resolved_count ?? 0 } : null,
-      hasBugDataEarly,
-      usageScore,
-    )
+    // Internal-use clients: don't penalize for PM-driven adoption or missing touchpoints
+    const clerkExt = clerkExtMap.get(code) ?? (() => { for (const [slug, ext] of clerkExtMap) { if (code.startsWith(slug)) return ext } return null })()
+    const isIntUse = phSummary?.adoption_level === 'PM-driven' && !(clerkExt != null && clerkExt > 0)
+    if (usageScore !== null && isIntUse) {
+      usageScore = 50
+    }
+    const sBugInfo = hasBugDataEarly ? { open: bugData?.open_count ?? 0, critical: bugData?.critical_count ?? 0, high: bugData?.high_count ?? 0, resolved: bugData?.resolved_count ?? 0 } : null
+    const rawScore = isIntUse
+      ? Math.round(
+          0.50 * (sBugInfo ? calculateBugScore(sBugInfo.open, sBugInfo.critical, sBugInfo.high, sBugInfo.resolved) : 100)
+          + 0.50 * (usageScore ?? 50)
+        )
+      : calculateHealthScore(
+          c.last_touchpoint_date,
+          c.last_touchpoint_type,
+          sBugInfo,
+          hasBugDataEarly,
+          usageScore,
+        )
     const { priorityScore } = calculatePriorityScore(rawScore, c.tier)
     if ((c.tier ?? 3) === 1 && priorityScore < 60) tier1AtRisk++
   }

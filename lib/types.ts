@@ -138,6 +138,7 @@ export interface ClientWithStats extends Client {
   active_external: number
   active_internal: number
   has_posthog_data: boolean
+  clerk_has_external: boolean
   posthog_configured?: boolean // only returned by /api/clients/[id]
 }
 

@@ -230,6 +230,31 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_clerk_users_org_slug ON clerk_users(org_slug);
     CREATE INDEX IF NOT EXISTS idx_clerk_users_email    ON clerk_users(email);
   `)
+
+  // Migration 8: Feedback session transcripts from Notion
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS feedback_transcripts (
+      notion_page_id      TEXT PRIMARY KEY,
+      client_code         TEXT,
+      client_name         TEXT,
+      session_id          TEXT,
+      session_date        TEXT,
+      status              TEXT,
+      products            TEXT,
+      transcript_text     TEXT,
+      transcript_summary  TEXT,
+      last_edited_time    TEXT,
+      imported_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_transcripts_client ON feedback_transcripts(client_code);
+    CREATE INDEX IF NOT EXISTS idx_transcripts_date   ON feedback_transcripts(session_date);
+  `)
+
+  // Migration 8b: Add transcript_summary column if missing (backfill for existing DBs)
+  const transcriptCols = (db.prepare('PRAGMA table_info(feedback_transcripts)').all() as { name: string }[]).map((c) => c.name)
+  if (!transcriptCols.includes('transcript_summary')) {
+    db.exec('ALTER TABLE feedback_transcripts ADD COLUMN transcript_summary TEXT')
+  }
 }
 
 // ─────────────────────────── SYNC METADATA ────────────────────────────

@@ -13,6 +13,7 @@ interface TopUser {
   tier: number | null
   sessions: number
   pageviews: number
+  avg_session_seconds: number
   last_seen: string
   is_internal: boolean
 }
@@ -21,7 +22,16 @@ interface AggregatedInternalUser {
   email: string
   sessions: number
   pageviews: number
+  avg_session_seconds: number
   last_seen: string
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds <= 0) return '—'
+  if (seconds < 60) return `${seconds}s`
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return s > 0 ? `${m}m ${s}s` : `${m}m`
 }
 
 function formatLastSeen(isoStr: string): string {
@@ -61,7 +71,7 @@ export default function UsersPage() {
   const [excludeProduct, setExcludeProduct]   = useState(false)
   const [filterOrg, setFilterOrg]             = useState('')
   const [filterTier, setFilterTier]           = useState<string>('all')
-  const [sortMetric, setSortMetric]           = useState<'sessions' | 'pageviews'>('sessions')
+  const [sortMetric, setSortMetric]           = useState<'sessions' | 'pageviews' | 'avg_session_seconds'>('sessions')
 
   const fetchUsers = useCallback(async () => {
     setLoading(true)
@@ -92,20 +102,24 @@ export default function UsersPage() {
     .sort((a, b) => b[sortMetric] - a[sortMetric])
 
   // Internal: aggregate by email across all orgs/clients
-  const internalUsers: AggregatedInternalUser[] = Object.values(
-    users
-      .filter((u) => u.is_internal)
-      .filter((u) => !excludeProduct || !isProductTeam(u.email))
-      .reduce<Record<string, AggregatedInternalUser>>((acc, u) => {
-        if (!acc[u.email]) {
-          acc[u.email] = { email: u.email, sessions: 0, pageviews: 0, last_seen: u.last_seen }
-        }
-        acc[u.email].sessions  += u.sessions
-        acc[u.email].pageviews += u.pageviews
-        if (u.last_seen > acc[u.email].last_seen) acc[u.email].last_seen = u.last_seen
-        return acc
-      }, {})
-  ).sort((a, b) => b[sortMetric] - a[sortMetric])
+  const internalAgg: Record<string, AggregatedInternalUser & { _totalDur: number; _totalSess: number }> = {}
+  users
+    .filter((u) => u.is_internal)
+    .filter((u) => !excludeProduct || !isProductTeam(u.email))
+    .forEach((u) => {
+      if (!internalAgg[u.email]) {
+        internalAgg[u.email] = { email: u.email, sessions: 0, pageviews: 0, avg_session_seconds: 0, last_seen: u.last_seen, _totalDur: 0, _totalSess: 0 }
+      }
+      const a = internalAgg[u.email]
+      a.sessions  += u.sessions
+      a.pageviews += u.pageviews
+      a._totalDur += u.avg_session_seconds * u.sessions
+      a._totalSess += u.sessions
+      if (u.last_seen > a.last_seen) a.last_seen = u.last_seen
+    })
+  const internalUsers: AggregatedInternalUser[] = Object.values(internalAgg)
+    .map((a) => ({ email: a.email, sessions: a.sessions, pageviews: a.pageviews, avg_session_seconds: a._totalSess > 0 ? Math.round(a._totalDur / a._totalSess) : 0, last_seen: a.last_seen }))
+    .sort((a, b) => b[sortMetric] - a[sortMetric])
 
   const PAGE_SIZE = 10
 
@@ -125,6 +139,7 @@ export default function UsersPage() {
               <th className="px-3 py-2 text-slate-500 font-medium text-center">Tier</th>
               <th className="px-3 py-2 text-slate-500 font-medium text-right">Sessioni</th>
               <th className="px-3 py-2 text-slate-500 font-medium text-right">PV</th>
+              {sortMetric === 'avg_session_seconds' && <th className="px-3 py-2 text-slate-500 font-medium text-right">Durata media</th>}
               <th className="px-4 py-2 text-slate-500 font-medium text-right">Ultimo accesso</th>
             </tr>
           </thead>
@@ -151,6 +166,7 @@ export default function UsersPage() {
                   </td>
                   <td className="px-3 py-1.5 text-right text-slate-200 tabular-nums font-semibold">{u.sessions}</td>
                   <td className="px-3 py-1.5 text-right text-slate-400 tabular-nums">{u.pageviews}</td>
+                  {sortMetric === 'avg_session_seconds' && <td className="px-3 py-1.5 text-right text-emerald-400 tabular-nums">{formatDuration(u.avg_session_seconds)}</td>}
                   <td className={`px-4 py-1.5 text-right tabular-nums ${lastSeenColor(u.last_seen)}`}>{formatLastSeen(u.last_seen)}</td>
                 </tr>
               )
@@ -188,6 +204,7 @@ export default function UsersPage() {
               <th className="px-4 py-2 text-slate-500 font-medium">Email</th>
               <th className="px-3 py-2 text-slate-500 font-medium text-right">Sessioni</th>
               <th className="px-3 py-2 text-slate-500 font-medium text-right">PV</th>
+              {sortMetric === 'avg_session_seconds' && <th className="px-3 py-2 text-slate-500 font-medium text-right">Durata media</th>}
               <th className="px-4 py-2 text-slate-500 font-medium text-right">Ultimo accesso</th>
             </tr>
           </thead>
@@ -197,6 +214,7 @@ export default function UsersPage() {
                 <td className="px-4 py-1.5 font-mono text-xs text-slate-300">{u.email}</td>
                 <td className="px-3 py-1.5 text-right text-slate-200 tabular-nums font-semibold">{u.sessions}</td>
                 <td className="px-3 py-1.5 text-right text-slate-400 tabular-nums">{u.pageviews}</td>
+                {sortMetric === 'avg_session_seconds' && <td className="px-3 py-1.5 text-right text-emerald-400 tabular-nums">{formatDuration(u.avg_session_seconds)}</td>}
                 <td className={`px-4 py-1.5 text-right tabular-nums ${lastSeenColor(u.last_seen)}`}>{formatLastSeen(u.last_seen)}</td>
               </tr>
             ))}
@@ -257,16 +275,18 @@ export default function UsersPage() {
           </select>
           {/* Sort metric toggle */}
           <div className="h-9 flex items-center rounded-md border overflow-hidden" style={{ borderColor: '#334155' }}>
-            <button
-              onClick={() => setSortMetric('sessions')}
-              className={`px-3 h-full text-xs font-medium transition-colors ${sortMetric === 'sessions' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-              style={sortMetric !== 'sessions' ? { background: '#1e293b' } : {}}
-            >Sessioni</button>
-            <button
-              onClick={() => setSortMetric('pageviews')}
-              className={`px-3 h-full text-xs font-medium transition-colors ${sortMetric === 'pageviews' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-              style={sortMetric !== 'pageviews' ? { background: '#1e293b' } : {}}
-            >PageView</button>
+            {([
+              ['sessions', 'Sessioni'],
+              ['pageviews', 'PageView'],
+              ['avg_session_seconds', 'Durata'],
+            ] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setSortMetric(key)}
+                className={`px-3 h-full text-xs font-medium transition-colors ${sortMetric === key ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                style={sortMetric !== key ? { background: '#1e293b' } : {}}
+              >{label}</button>
+            ))}
           </div>
           <button
             onClick={() => setExcludeProduct((v) => !v)}
@@ -301,8 +321,10 @@ export default function UsersPage() {
                     <div className="text-xs text-slate-600 truncate">{u.client_name ?? u.org}</div>
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="text-sm font-semibold text-blue-400 tabular-nums">{sortMetric === 'sessions' ? u.sessions : u.pageviews} {sortMetric === 'sessions' ? 'sess' : 'pv'}</div>
-                    <div className="text-xs text-slate-500 tabular-nums">{sortMetric === 'sessions' ? u.pageviews : u.sessions} {sortMetric === 'sessions' ? 'pv' : 'sess'}</div>
+                    <div className="text-sm font-semibold text-blue-400 tabular-nums">
+                      {sortMetric === 'avg_session_seconds' ? formatDuration(u.avg_session_seconds) : u[sortMetric]} {sortMetric === 'sessions' ? 'sess' : sortMetric === 'pageviews' ? 'pv' : ''}
+                    </div>
+                    <div className="text-xs text-slate-500 tabular-nums">{u.sessions} sess · {u.pageviews} pv</div>
                   </div>
                 </div>
               ))}
@@ -323,8 +345,10 @@ export default function UsersPage() {
                     <div className="font-mono text-xs text-slate-300 truncate">{u.email}</div>
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="text-sm font-semibold text-purple-400 tabular-nums">{sortMetric === 'sessions' ? u.sessions : u.pageviews} {sortMetric === 'sessions' ? 'sess' : 'pv'}</div>
-                    <div className="text-xs text-slate-500 tabular-nums">{sortMetric === 'sessions' ? u.pageviews : u.sessions} {sortMetric === 'sessions' ? 'pv' : 'sess'}</div>
+                    <div className="text-sm font-semibold text-purple-400 tabular-nums">
+                      {sortMetric === 'avg_session_seconds' ? formatDuration(u.avg_session_seconds) : u[sortMetric]} {sortMetric === 'sessions' ? 'sess' : sortMetric === 'pageviews' ? 'pv' : ''}
+                    </div>
+                    <div className="text-xs text-slate-500 tabular-nums">{u.sessions} sess · {u.pageviews} pv</div>
                   </div>
                 </div>
               ))}
@@ -338,7 +362,7 @@ export default function UsersPage() {
       <div className="rounded-lg border overflow-hidden" style={{ borderColor: '#1e293b' }}>
         <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: '#1e293b', background: '#0f172a' }}>
           <h2 className="text-sm font-semibold text-slate-200">Utenti External ({externalUsers.length})</h2>
-          <span className="text-xs text-slate-500">ordinati per {sortMetric === 'sessions' ? 'sessioni' : 'pageview'}</span>
+          <span className="text-xs text-slate-500">ordinati per {sortMetric === 'sessions' ? 'sessioni' : sortMetric === 'pageviews' ? 'pageview' : 'durata media'}</span>
         </div>
         <div style={{ background: '#0a0f1e' }}>
           {loading ? (

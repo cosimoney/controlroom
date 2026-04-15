@@ -112,8 +112,8 @@ export default function DashboardPage() {
       if (!activeKpiFilter) return true
       switch (activeKpiFilter) {
         case 'active':      return c.status === 'active'
-        case 'to_contact':  return (c.days_since_contact ?? 9999) > 30
-        case 'critical':    return (c.days_since_contact ?? 9999) > 60
+        case 'to_contact':  return !(c.has_posthog_data && !c.clerk_has_external) && (c.days_since_contact ?? 9999) > 30
+        case 'critical':    return !(c.has_posthog_data && !c.clerk_has_external) && (c.arr ?? 0) >= 3000 && (c.days_since_contact ?? 9999) > 60
         case 'tier1_risk':  return (c.tier ?? 3) === 1 && c.health_score < 60
         case 'expiring': {
           const d = daysUntil(c.service_end)
@@ -181,10 +181,19 @@ export default function DashboardPage() {
   async function handleNotionSync() {
     setSyncingNotion(true)
     try {
-      const res = await fetch('/api/bugs/sync-notion', { method: 'POST' })
-      if (!res.ok) throw new Error((await res.json()).error)
-      const { synced } = await res.json()
-      toast.success(`✓ Sync completato — ${synced} bug importati da Notion`)
+      // Sync bugs and transcripts in parallel
+      const [bugsRes, transRes] = await Promise.all([
+        fetch('/api/bugs/sync-notion', { method: 'POST' }),
+        fetch('/api/notion/transcripts/sync', { method: 'POST' }),
+      ])
+      if (!bugsRes.ok) throw new Error((await bugsRes.json()).error)
+      const { synced: bugsSynced } = await bugsRes.json()
+      let transMsg = ''
+      if (transRes.ok) {
+        const t = await transRes.json()
+        transMsg = ` · ${t.synced} transcript (${t.body_refreshed} aggiornati)`
+      }
+      toast.success(`✓ Sync Notion — ${bugsSynced} bug${transMsg}`)
       fetchAll()
     } catch (e) {
       toast.error(`Errore sync Notion: ${e}`)
@@ -269,8 +278,10 @@ export default function DashboardPage() {
             <button onClick={handleRefreshAll} disabled={syncingAll} title="Sync tutto" className="h-9 w-9 flex items-center justify-center rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50">
               <RefreshCw className={`h-4 w-4 ${syncingAll ? 'animate-spin' : ''}`} />
             </button>
+            <Link href="/agenda" className="text-xs text-slate-400 hover:text-white transition-colors">Agenda</Link>
             <Link href="/users" className="text-xs text-slate-400 hover:text-white transition-colors">Top Users</Link>
             <Link href="/modules" className="text-xs text-slate-400 hover:text-white transition-colors">Moduli</Link>
+            <Link href="/trends" className="text-xs text-slate-400 hover:text-white transition-colors">Trends</Link>
             <Link href="/contracts"><Button variant="outline" size="sm"><FileText className="h-3.5 w-3.5" />Contratti</Button></Link>
             <Link href="/bugs"><Button variant="outline" size="sm"><Bug className="h-3.5 w-3.5" />Bug</Button></Link>
             <Link href="/import"><Button variant="outline" size="sm">Import CSV</Button></Link>
@@ -805,8 +816,10 @@ function LastSeenCell({ client }: { client: ClientWithStats }) {
         <div className={`text-xs tabular-nums ${daysColor(extDays)}`}>
           🏢 {extDays === 0 ? 'oggi' : `${extDays}gg fa`}
         </div>
+      ) : client.clerk_has_external ? (
+        <div className="text-xs text-red-400">⚠ No Access 30d</div>
       ) : (
-        <div className="text-xs text-yellow-500">⚠ solo internal</div>
+        <div className="text-xs text-slate-500">🔧 Internal use</div>
       )}
       {intDays !== null && (
         <div className={`text-xs tabular-nums ${daysColor(intDays)}`}>
@@ -874,9 +887,13 @@ function ClientRow({ client, hasBugData, hasPostHogData, hasMondayData }: {
         ) : <span className="text-slate-600 italic">Mai contattato</span>}
       </td>
       <td className="px-3 py-3 whitespace-nowrap">
-        <span className={`font-semibold tabular-nums text-sm ${getDaysColorClass(client.days_since_contact)}`}>
-          {client.days_since_contact !== null ? `${client.days_since_contact}gg` : '—'}
-        </span>
+        {client.has_posthog_data && !client.clerk_has_external ? (
+          <span className="text-slate-600 text-xs">N/A</span>
+        ) : (
+          <span className={`font-semibold tabular-nums text-sm ${getDaysColorClass(client.days_since_contact)}`}>
+            {client.days_since_contact !== null ? `${client.days_since_contact}gg` : '—'}
+          </span>
+        )}
       </td>
       {hasBugData && (
         <td className="px-3 py-3 whitespace-nowrap"><BugCell client={client} /></td>

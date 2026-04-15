@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { ArrowLeft, Edit2, Save, X, Plus, Trash2, Phone, Mail, Users, ExternalLink, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus, RefreshCw, AlertTriangle, BookOpen } from 'lucide-react'
+import { ArrowLeft, Edit2, Save, X, Plus, Trash2, Phone, Mail, Users, ExternalLink, ChevronDown, ChevronUp, TrendingUp, TrendingDown, Minus, RefreshCw, AlertTriangle, BookOpen, Sparkles, Copy, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -338,6 +338,9 @@ export default function ClientDetailPage() {
             posthogModules={usage?.modules ?? {}}
             clerkLoading={clerkLoading}
           />
+
+          {/* AI-generated session script */}
+          <PrepareSessionCard clientId={client.id} />
 
           {/* PostHog modules + users (only when data available) */}
           {usage && (
@@ -1046,6 +1049,121 @@ function InfoRowAlways({ label, value }: { label: string; value: string | null |
     <div>
       <span className="text-xs text-slate-500">{label}: </span>
       {value ? <span className="text-sm text-slate-300">{value}</span> : <span className="text-sm text-slate-600">—</span>}
+    </div>
+  )
+}
+
+// ─── Prepare Session Card (AI-generated script) ────────────────────
+
+function PrepareSessionCard({ clientId }: { clientId: number }) {
+  const [script, setScript] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [transcriptCount, setTranscriptCount] = useState<number | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [tokenUsage, setTokenUsage] = useState<{ input: number; output: number; cache_read: number } | null>(null)
+
+  async function handleGenerate() {
+    setLoading(true)
+    setError(null)
+    setScript(null)
+    try {
+      const res = await fetch(`/api/clients/${clientId}/generate-script`, { method: 'POST' })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        setError(d.error ?? `Errore ${res.status}`)
+        return
+      }
+      const data = await res.json()
+      setScript(data.script)
+      setTranscriptCount(data.context?.transcripts?.length ?? 0)
+      setTokenUsage({
+        input: data.usage?.input_tokens ?? 0,
+        output: data.usage?.output_tokens ?? 0,
+        cache_read: data.usage?.cache_read ?? 0,
+      })
+    } catch {
+      setError('Errore di rete')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleCopy() {
+    if (!script) return
+    await navigator.clipboard.writeText(script)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="rounded-lg border overflow-hidden" style={{ borderColor: '#1e293b' }}>
+      <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: '#1e293b', background: '#0f172a' }}>
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-purple-400" />
+          <h3 className="text-sm font-semibold text-slate-200">Prepare Session</h3>
+          <span className="text-xs text-slate-500">AI-generated script</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {script && (
+            <button
+              onClick={handleCopy}
+              className="text-xs px-2 py-1 rounded border border-slate-700 text-slate-400 hover:text-white hover:border-slate-500 transition-colors inline-flex items-center gap-1"
+            >
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              {copied ? 'Copiato' : 'Copia'}
+            </button>
+          )}
+          <button
+            onClick={handleGenerate}
+            disabled={loading}
+            className="text-xs px-3 py-1.5 rounded bg-purple-500/15 border border-purple-500/40 text-purple-300 hover:bg-purple-500/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
+          >
+            <Sparkles className="h-3 w-3" />
+            {loading ? 'Generando...' : script ? 'Rigenera' : 'Genera script'}
+          </button>
+        </div>
+      </div>
+      <div className="px-4 py-4" style={{ background: '#0a0f1e' }}>
+        {!script && !loading && !error && (
+          <p className="text-xs text-slate-500">
+            Clicca &quot;Genera script&quot; per creare uno script personalizzato per la prossima feedback session, basato su utilizzo, bug aperti, contratto e transcript delle sessioni precedenti.
+          </p>
+        )}
+        {loading && (
+          <div className="flex items-center gap-2 text-sm text-slate-400">
+            <RefreshCw className="h-4 w-4 animate-spin" />
+            Analisi contesto e generazione in corso...
+          </div>
+        )}
+        {error && (
+          <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/30 rounded px-3 py-2">
+            {error}
+          </div>
+        )}
+        {script && (
+          <>
+            <div className="flex items-center gap-3 text-xs text-slate-500 mb-3 pb-2 border-b" style={{ borderColor: '#1e293b' }}>
+              <span>📄 {transcriptCount} transcript usati</span>
+              {tokenUsage && (
+                <>
+                  <span>•</span>
+                  <span className="tabular-nums">{tokenUsage.input} in / {tokenUsage.output} out tokens</span>
+                  {tokenUsage.cache_read > 0 && (
+                    <>
+                      <span>•</span>
+                      <span className="text-green-400 tabular-nums">{tokenUsage.cache_read} cached</span>
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+            <div className="text-sm text-slate-200 whitespace-pre-wrap leading-relaxed prose prose-sm prose-invert max-w-none">
+              {script}
+            </div>
+          </>
+        )}
+      </div>
     </div>
   )
 }
