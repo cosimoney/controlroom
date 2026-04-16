@@ -13,6 +13,7 @@ import {
   formatDate, formatTouchpointType, ADOPTION_COLORS, TIER_STYLES,
 } from '@/lib/health'
 import type { ClientWithStats, DashboardStats, AdoptionLevel } from '@/lib/types'
+import { LogoutButton } from '@/components/auth/logout-button'
 
 type SortKey = 'days_since_contact' | 'name' | 'health_score' | 'open_bugs' | 'arr' | 'tier' | 'service_end'
 type SortDir = 'asc' | 'desc'
@@ -286,6 +287,7 @@ export default function DashboardPage() {
             <Link href="/bugs"><Button variant="outline" size="sm"><Bug className="h-3.5 w-3.5" />Bug</Button></Link>
             <Link href="/import"><Button variant="outline" size="sm">Import CSV</Button></Link>
             <Link href="/clients/new"><Button size="sm"><Plus className="h-4 w-4" />Nuovo cliente</Button></Link>
+            <LogoutButton />
           </div>
         </div>
       </header>
