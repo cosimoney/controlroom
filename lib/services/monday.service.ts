@@ -223,30 +223,39 @@ export async function upsertMondayRows(rows: Record<string, unknown>[]): Promise
         const fields = MONDAY_WRITABLE_FIELDS.filter((f) => f in mapped)
         if (fields.length === 0) { result.skipped++; continue }
 
-        // Find existing client: exact (client_code + name) match first, then code-only fallback.
-        // The sync NEVER creates new clients — it only updates existing ones.
-        let existingRows = await tsql<{ id: number }[]>`
+        // Find existing client by (client_code + name) exact match.
+        // - If found → UPDATE
+        // - If not found → INSERT new client
+        // This correctly handles the De'Longhi/De'Longhi_US case where two clients share
+        // the same client_code but have different names (treated as separate rows).
+        const existingRows = await tsql<{ id: number }[]>`
           SELECT id FROM clients
           WHERE LOWER(TRIM(client_code)) = ${resolvedCode.toLowerCase()}
             AND LOWER(TRIM(name)) = ${itemName.toLowerCase()}
+          LIMIT 1
         `
-        if (existingRows.length === 0) {
-          existingRows = await tsql<{ id: number }[]>`
-            SELECT id FROM clients
-            WHERE LOWER(TRIM(client_code)) = ${resolvedCode.toLowerCase()}
-            ORDER BY id ASC LIMIT 1
-          `
-        }
         const existing = existingRows[0]
-        if (!existing) { result.skipped++; continue }
 
-        // Build update object with only the fields present in mapped row
-        const updateData: Record<string, unknown> = {}
-        for (const f of fields) updateData[f] = mapped[f] ?? null
-        updateData.updated_at = new Date().toISOString()
+        // Build the data object with only the fields present in the mapped row
+        const fieldData: Record<string, unknown> = {}
+        for (const f of fields) fieldData[f] = mapped[f] ?? null
 
-        await tsql`UPDATE clients SET ${tsql(updateData)} WHERE id = ${existing.id}`
-        result.updated++
+        if (existing) {
+          // UPDATE existing client
+          fieldData.updated_at = new Date().toISOString()
+          await tsql`UPDATE clients SET ${tsql(fieldData)} WHERE id = ${existing.id}`
+          result.updated++
+        } else {
+          // INSERT new client — set name + client_code + status if not already in fieldData
+          const insertData: Record<string, unknown> = {
+            name: itemName || (mapped.name as string) || resolvedCode,
+            client_code: resolvedCode.toUpperCase(),
+            status: 'active',
+            ...fieldData,
+          }
+          await tsql`INSERT INTO clients ${tsql(insertData)}`
+          result.created++
+        }
         result.synced++
       }
     })
