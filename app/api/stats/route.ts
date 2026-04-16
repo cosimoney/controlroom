@@ -28,15 +28,29 @@ export async function GET() {
   const hasBugDataEarly = bug_count > 0
 
   // Build a quick bug lookup for stats calculation
+  // (split into two grouped queries + LEFT JOIN — Postgres is strict about correlated
+  //  subqueries referencing ungrouped columns from the outer query)
   const bugRows = hasBugDataEarly
     ? await sql<{ rby: string; open_count: number; critical_count: number; high_count: number; resolved_count: number }[]>`
-        SELECT LOWER(TRIM(reported_by)) AS rby,
-               COUNT(*)::int AS open_count,
-               SUM(CASE WHEN priority='Critical' THEN 1 ELSE 0 END)::int AS critical_count,
-               SUM(CASE WHEN priority='High' THEN 1 ELSE 0 END)::int AS high_count,
-               (SELECT COUNT(*)::int FROM bugs b2 WHERE b2.status IN ('Fixed','Closed') AND LOWER(TRIM(b2.reported_by)) = LOWER(TRIM(bugs.reported_by))) AS resolved_count
-        FROM bugs WHERE status IN ('Open','In Progress','Testing')
-        GROUP BY LOWER(TRIM(reported_by))
+        SELECT
+          o.rby,
+          o.open_count,
+          o.critical_count,
+          o.high_count,
+          COALESCE(r.resolved_count, 0)::int AS resolved_count
+        FROM (
+          SELECT LOWER(TRIM(reported_by)) AS rby,
+                 COUNT(*)::int AS open_count,
+                 SUM(CASE WHEN priority='Critical' THEN 1 ELSE 0 END)::int AS critical_count,
+                 SUM(CASE WHEN priority='High' THEN 1 ELSE 0 END)::int AS high_count
+          FROM bugs WHERE status IN ('Open','In Progress','Testing')
+          GROUP BY LOWER(TRIM(reported_by))
+        ) o
+        LEFT JOIN (
+          SELECT LOWER(TRIM(reported_by)) AS rby, COUNT(*)::int AS resolved_count
+          FROM bugs WHERE status IN ('Fixed','Closed')
+          GROUP BY LOWER(TRIM(reported_by))
+        ) r ON r.rby = o.rby
       `
     : []
   const bugMap = new Map(bugRows.map((r) => [r.rby, r]))
