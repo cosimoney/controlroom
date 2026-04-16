@@ -2,12 +2,12 @@
  * lib/clerk.ts — Clerk Backend API client (READ-ONLY)
  *
  * CRITICAL: Only GET requests are made to Clerk API.
- * All writes go to local SQLite cache only.
+ * All writes go to local Postgres cache only.
  *
  * Join key: clerk_organizations.slug === clients.client_code (case-insensitive)
  */
 
-import { getDb, recordSync } from './db'
+import { db, recordSync } from './db'
 import { isInternalUser } from './posthog'
 import type { ClerkOrgRow, ClerkUserRow } from './types'
 
@@ -26,11 +26,6 @@ function clerkHeaders(): HeadersInit {
 
 /**
  * parseClerkModules — extract enabled module names from Clerk public_metadata.
- *
- * The metadata structure uses nested objects with `.active` booleans:
- *   { sales: { active: true }, media: { active: true, dsp: { active: true } }, ... }
- *
- * Returns a normalized array of module identifier strings.
  */
 export function parseClerkModules(metadata: Record<string, unknown>): string[] {
   if (!metadata) return []
@@ -59,7 +54,6 @@ export function parseClerkModules(metadata: Record<string, unknown>): string[] {
   if (at?.seller) modules.push('seller')
   if (at?.vendor) modules.push('vendor')
 
-  // Currencies stored separately (not a module)
   return [...new Set(modules)]
 }
 
@@ -131,81 +125,12 @@ export async function fetchOrgMembers(orgId: string): Promise<ClerkMemberApiRow[
   return all
 }
 
-// ─── DB upsert helpers ─────────────────────────────────────────────────
-
-function upsertOrg(
-  db: ReturnType<typeof getDb>,
-  org: ClerkOrgApiRow,
-  stats: { total: number; internal: number; external: number },
-): void {
-  const modules    = parseClerkModules(org.public_metadata)
-  const currencies = (org.public_metadata.currencies as unknown[] | undefined) ?? []
-  db.prepare(`
-    INSERT INTO clerk_organizations
-      (id, slug, name, modules_enabled, raw_metadata, currencies, total_members, internal_members, external_members, last_synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(id) DO UPDATE SET
-      slug             = excluded.slug,
-      name             = excluded.name,
-      modules_enabled  = excluded.modules_enabled,
-      raw_metadata     = excluded.raw_metadata,
-      currencies       = excluded.currencies,
-      total_members    = excluded.total_members,
-      internal_members = excluded.internal_members,
-      external_members = excluded.external_members,
-      last_synced_at   = excluded.last_synced_at
-  `).run(
-    org.id, org.slug ?? null, org.name,
-    JSON.stringify(modules),
-    JSON.stringify(org.public_metadata),
-    JSON.stringify(currencies),
-    stats.total, stats.internal, stats.external,
-  )
-}
-
-function upsertUser(
-  db: ReturnType<typeof getDb>,
-  orgId: string,
-  orgSlug: string | null,
-  member: ClerkMemberApiRow,
-): void {
-  const pud        = member.public_user_data
-  const email      = pud.identifier ?? null
-  const isInternal = email ? isInternalUser(email) : false
-  const lastSignIn = pud.last_sign_in_at
-    ? new Date(pud.last_sign_in_at).toISOString()
-    : null
-  const createdAt  = pud.created_at
-    ? new Date(pud.created_at).toISOString()
-    : new Date(member.created_at).toISOString()
-
-  db.prepare(`
-    INSERT INTO clerk_users
-      (id, org_id, org_slug, email, first_name, last_name, role, is_internal, last_sign_in_at, created_at, last_synced_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-    ON CONFLICT(id) DO UPDATE SET
-      org_id          = excluded.org_id,
-      org_slug        = excluded.org_slug,
-      email           = excluded.email,
-      first_name      = excluded.first_name,
-      last_name       = excluded.last_name,
-      role            = excluded.role,
-      is_internal     = excluded.is_internal,
-      last_sign_in_at = excluded.last_sign_in_at,
-      last_synced_at  = excluded.last_synced_at
-  `).run(
-    pud.user_id, orgId, orgSlug,
-    email, pud.first_name ?? null, pud.last_name ?? null,
-    member.role, isInternal ? 1 : 0, lastSignIn, createdAt,
-  )
-}
-
 // ─── Full sync ─────────────────────────────────────────────────────────
 
 export async function syncAllClerk(): Promise<{ orgs: number; users: number; errors: string[] }> {
-  const db     = getDb()
+  const sql      = await db()
   const errors: string[] = []
-  let userCount = 0
+  let userCount  = 0
 
   const orgs = await fetchAllOrganizations()
 
@@ -218,14 +143,57 @@ export async function syncAllClerk(): Promise<{ orgs: number; users: number; err
         const members = await fetchOrgMembers(org.id)
         let internal = 0, external = 0
 
-        db.transaction(() => {
+        // postgres.js transaction: all inserts + upsert commit atomically
+        await sql.begin(async (tsql) => {
           for (const m of members) {
-            upsertUser(db, org.id, org.slug, m)
-            const email = m.public_user_data.identifier ?? ''
-            if (isInternalUser(email)) internal++; else external++
+            const pud        = m.public_user_data
+            const email      = pud.identifier ?? null
+            const isInternal = email ? isInternalUser(email) : false
+            const lastSignIn = pud.last_sign_in_at ? new Date(pud.last_sign_in_at).toISOString() : null
+            const createdAt  = pud.created_at
+              ? new Date(pud.created_at).toISOString()
+              : new Date(m.created_at).toISOString()
+
+            await tsql`
+              INSERT INTO clerk_users
+                (id, org_id, org_slug, email, first_name, last_name, role, is_internal, last_sign_in_at, created_at, last_synced_at)
+              VALUES (${pud.user_id}, ${org.id}, ${org.slug}, ${email}, ${pud.first_name ?? null},
+                      ${pud.last_name ?? null}, ${m.role}, ${isInternal ? 1 : 0}, ${lastSignIn}, ${createdAt}, NOW())
+              ON CONFLICT(id) DO UPDATE SET
+                org_id          = EXCLUDED.org_id,
+                org_slug        = EXCLUDED.org_slug,
+                email           = EXCLUDED.email,
+                first_name      = EXCLUDED.first_name,
+                last_name       = EXCLUDED.last_name,
+                role            = EXCLUDED.role,
+                is_internal     = EXCLUDED.is_internal,
+                last_sign_in_at = EXCLUDED.last_sign_in_at,
+                last_synced_at  = EXCLUDED.last_synced_at
+            `
+
+            if (isInternalUser(email ?? '')) internal++; else external++
           }
-          upsertOrg(db, org, { total: members.length, internal, external })
-        })()
+
+          const modules    = parseClerkModules(org.public_metadata)
+          const currencies = (org.public_metadata.currencies as unknown[] | undefined) ?? []
+          await tsql`
+            INSERT INTO clerk_organizations
+              (id, slug, name, modules_enabled, raw_metadata, currencies, total_members, internal_members, external_members, last_synced_at)
+            VALUES (${org.id}, ${org.slug ?? null}, ${org.name},
+                    ${JSON.stringify(modules)}, ${JSON.stringify(org.public_metadata)}, ${JSON.stringify(currencies)},
+                    ${members.length}, ${internal}, ${external}, NOW())
+            ON CONFLICT(id) DO UPDATE SET
+              slug             = EXCLUDED.slug,
+              name             = EXCLUDED.name,
+              modules_enabled  = EXCLUDED.modules_enabled,
+              raw_metadata     = EXCLUDED.raw_metadata,
+              currencies       = EXCLUDED.currencies,
+              total_members    = EXCLUDED.total_members,
+              internal_members = EXCLUDED.internal_members,
+              external_members = EXCLUDED.external_members,
+              last_synced_at   = EXCLUDED.last_synced_at
+          `
+        })
 
         userCount += members.length
       } catch (e) {
@@ -234,38 +202,44 @@ export async function syncAllClerk(): Promise<{ orgs: number; users: number; err
     }))
   }
 
-  recordSync('clerk', 'api', orgs.length)
+  await recordSync('clerk', 'api', orgs.length)
   return { orgs: orgs.length, users: userCount, errors }
 }
 
 // ─── Read helpers ──────────────────────────────────────────────────────
 
-export function getClerkOrgBySlug(slug: string): { org: ClerkOrgRow | null; users: ClerkUserRow[] } {
-  const db  = getDb()
-  let org = db.prepare(
-    `SELECT * FROM clerk_organizations WHERE LOWER(TRIM(slug)) = LOWER(TRIM(?))`
-  ).get(slug) as ClerkOrgRow | undefined
+export async function getClerkOrgBySlug(slug: string): Promise<{ org: ClerkOrgRow | null; users: ClerkUserRow[] }> {
+  const sql = await db()
+  let orgRows = await sql<ClerkOrgRow[]>`
+    SELECT * FROM clerk_organizations WHERE LOWER(TRIM(slug)) = LOWER(TRIM(${slug}))
+  `
+  let org = orgRows[0]
 
   // Fallback: try prefix match (e.g. client_code DISNA → slug disn)
   if (!org) {
-    org = db.prepare(
-      `SELECT * FROM clerk_organizations WHERE LOWER(TRIM(?)) LIKE LOWER(TRIM(slug)) || '%' ORDER BY LENGTH(slug) DESC LIMIT 1`
-    ).get(slug) as ClerkOrgRow | undefined
+    orgRows = await sql<ClerkOrgRow[]>`
+      SELECT * FROM clerk_organizations
+      WHERE LOWER(TRIM(${slug})) LIKE LOWER(TRIM(slug)) || '%'
+      ORDER BY LENGTH(slug) DESC
+      LIMIT 1
+    `
+    org = orgRows[0]
   }
 
   if (!org) return { org: null, users: [] }
 
-  const users = db.prepare(
-    `SELECT * FROM clerk_users WHERE org_id = ? ORDER BY is_internal ASC, last_sign_in_at DESC`
-  ).all(org.id) as ClerkUserRow[]
+  const users = await sql<ClerkUserRow[]>`
+    SELECT * FROM clerk_users WHERE org_id = ${org.id}
+    ORDER BY is_internal ASC, last_sign_in_at DESC
+  `
 
   return { org, users }
 }
 
-export function getClerkStatus(): { configured: boolean; orgCount: number; userCount: number } {
+export async function getClerkStatus(): Promise<{ configured: boolean; orgCount: number; userCount: number }> {
   if (!isClerkConfigured()) return { configured: false, orgCount: 0, userCount: 0 }
-  const db = getDb()
-  const { orgCount }  = db.prepare('SELECT COUNT(*) as orgCount FROM clerk_organizations').get() as { orgCount: number }
-  const { userCount } = db.prepare('SELECT COUNT(*) as userCount FROM clerk_users').get() as { userCount: number }
-  return { configured: true, orgCount, userCount }
+  const sql = await db()
+  const [{ org_count }]  = await sql<{ org_count: number }[]>`SELECT COUNT(*)::int as org_count FROM clerk_organizations`
+  const [{ user_count }] = await sql<{ user_count: number }[]>`SELECT COUNT(*)::int as user_count FROM clerk_users`
+  return { configured: true, orgCount: org_count, userCount: user_count }
 }

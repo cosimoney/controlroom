@@ -11,6 +11,6 @@ export async function POST() {
   }
 
   const { synced, errors } = await syncAllClients(30)
-  if (synced > 0) recordSync('posthog', 'api', synced)
+  if (synced > 0) await recordSync('posthog', 'api', synced)
   return NextResponse.json({ synced, errors })
 }

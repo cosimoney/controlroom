@@ -11,7 +11,7 @@
  */
 
 import * as XLSX from 'xlsx'
-import { getDb, recordSync } from '../db'
+import { db, recordSync } from '../db'
 import type { MondaySyncResult } from '../types'
 
 // ─── Config ──────────────────────────────────────────────────────────
@@ -200,62 +200,62 @@ const MONDAY_WRITABLE_FIELDS = [
 ] as const
 
 
-export function upsertMondayRows(rows: Record<string, unknown>[]): MondaySyncResult {
-  const db = getDb()
+export async function upsertMondayRows(rows: Record<string, unknown>[]): Promise<MondaySyncResult> {
+  const sql = await db()
   const result: MondaySyncResult = { synced: 0, created: 0, updated: 0, skipped: 0, errors: [] }
 
-  const upsertTx = db.transaction(() => {
-    for (const rawRow of rows) {
-      const { mapped, clientCode } = mapMondayRow(rawRow)
-      const itemName = String(rawRow.Name ?? mapped.name ?? '').trim()
-
-      // Skip closed or churned rows — only sync active contracts
-      const isClosed = String(mapped.is_closed ?? '').trim().toLowerCase()
-      const isChurn  = String(mapped.is_churn  ?? '').trim().toLowerCase()
-      if (isClosed && !['', 'no', '-', 'null'].includes(isClosed)) { result.skipped++; continue }
-      if (isChurn  && !['', 'no', '-', 'null'].includes(isChurn))  { result.skipped++; continue }
-
-      // Resolve client_code from CLIENT_ID_TEXT column (text type, works via both API and CSV).
-      // Falls back to legacy 'CLIENT ID' column header for old CSV exports.
-      let resolvedCode = clientCode
-
-      if (!resolvedCode) { result.skipped++; continue }
-
-      // Filter to only writable fields that are present in the mapped row
-      const fields = MONDAY_WRITABLE_FIELDS.filter((f) => f in mapped)
-      if (fields.length === 0) { result.skipped++; continue }
-
-      // Find existing client: exact (client_code + name) match first, then code-only fallback.
-      // The sync NEVER creates new clients — it only updates existing ones.
-      // New clients must be added manually.
-      const existing =
-        (db.prepare(
-          'SELECT id FROM clients WHERE LOWER(TRIM(client_code)) = ? AND LOWER(TRIM(name)) = ?'
-        ).get(resolvedCode.toLowerCase(), itemName.toLowerCase()) as { id: number } | undefined)
-        ??
-        (db.prepare(
-          'SELECT id FROM clients WHERE LOWER(TRIM(client_code)) = ? ORDER BY id ASC LIMIT 1'
-        ).get(resolvedCode.toLowerCase()) as { id: number } | undefined)
-
-      if (!existing) { result.skipped++; continue }
-
-      // UPDATE only — never INSERT
-      const setClause = fields.map((f) => `${f} = ?`).join(', ')
-      const values = fields.map((f) => mapped[f] ?? null)
-      db.prepare(
-        `UPDATE clients SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-      ).run(...values, existing.id)
-      result.updated++
-      result.synced++
-    }
-  })
-
   try {
-    upsertTx()
-    db.prepare(
-      'INSERT INTO monday_sync_log (sync_type, records_synced, records_created, records_updated) VALUES (?, ?, ?, ?)'
-    ).run('csv', result.synced, result.created, result.updated)
-    recordSync('monday', 'csv', result.synced)
+    await sql.begin(async (tsql) => {
+      for (const rawRow of rows) {
+        const { mapped, clientCode } = mapMondayRow(rawRow)
+        const itemName = String(rawRow.Name ?? mapped.name ?? '').trim()
+
+        // Skip closed or churned rows — only sync active contracts
+        const isClosed = String(mapped.is_closed ?? '').trim().toLowerCase()
+        const isChurn  = String(mapped.is_churn  ?? '').trim().toLowerCase()
+        if (isClosed && !['', 'no', '-', 'null'].includes(isClosed)) { result.skipped++; continue }
+        if (isChurn  && !['', 'no', '-', 'null'].includes(isChurn))  { result.skipped++; continue }
+
+        const resolvedCode = clientCode
+        if (!resolvedCode) { result.skipped++; continue }
+
+        // Filter to only writable fields that are present in the mapped row
+        const fields = MONDAY_WRITABLE_FIELDS.filter((f) => f in mapped)
+        if (fields.length === 0) { result.skipped++; continue }
+
+        // Find existing client: exact (client_code + name) match first, then code-only fallback.
+        // The sync NEVER creates new clients — it only updates existing ones.
+        let existingRows = await tsql<{ id: number }[]>`
+          SELECT id FROM clients
+          WHERE LOWER(TRIM(client_code)) = ${resolvedCode.toLowerCase()}
+            AND LOWER(TRIM(name)) = ${itemName.toLowerCase()}
+        `
+        if (existingRows.length === 0) {
+          existingRows = await tsql<{ id: number }[]>`
+            SELECT id FROM clients
+            WHERE LOWER(TRIM(client_code)) = ${resolvedCode.toLowerCase()}
+            ORDER BY id ASC LIMIT 1
+          `
+        }
+        const existing = existingRows[0]
+        if (!existing) { result.skipped++; continue }
+
+        // Build update object with only the fields present in mapped row
+        const updateData: Record<string, unknown> = {}
+        for (const f of fields) updateData[f] = mapped[f] ?? null
+        updateData.updated_at = new Date().toISOString()
+
+        await tsql`UPDATE clients SET ${tsql(updateData)} WHERE id = ${existing.id}`
+        result.updated++
+        result.synced++
+      }
+    })
+
+    await sql`
+      INSERT INTO monday_sync_log (sync_type, records_synced, records_created, records_updated)
+      VALUES ('csv', ${result.synced}, ${result.created}, ${result.updated})
+    `
+    await recordSync('monday', 'csv', result.synced)
   } catch (e) {
     result.errors.push(String(e))
   }
@@ -377,34 +377,36 @@ export async function syncFromMondayApi(): Promise<MondaySyncResult> {
     cursor = nextCursor
   }
 
-  const result = upsertMondayRows(allRows)
+  const result = await upsertMondayRows(allRows)
 
   // Update sync log with 'api' type
-  const db = getDb()
-  db.prepare(
-    'INSERT INTO monday_sync_log (sync_type, records_synced, records_created, records_updated) VALUES (?, ?, ?, ?)'
-  ).run('api', result.synced, result.created, result.updated)
-  recordSync('monday', 'api', result.synced)
+  const sql = await db()
+  await sql`
+    INSERT INTO monday_sync_log (sync_type, records_synced, records_created, records_updated)
+    VALUES ('api', ${result.synced}, ${result.created}, ${result.updated})
+  `
+  await recordSync('monday', 'api', result.synced)
 
   return result
 }
 
 // ─── Status helpers ───────────────────────────────────────────────────
 
-export function getMondayStatus(): {
+export async function getMondayStatus(): Promise<{
   status: 'api' | 'csv' | 'none'
   lastSync: string | null
   lastSyncType: string | null
   recordCount: number
-} {
-  const db = getDb()
-  const lastLog = db.prepare(
-    'SELECT sync_type, synced_at FROM monday_sync_log ORDER BY id DESC LIMIT 1'
-  ).get() as { sync_type: string; synced_at: string } | undefined
+}> {
+  const sql = await db()
+  const logRows = await sql<{ sync_type: string; synced_at: string }[]>`
+    SELECT sync_type, synced_at::text FROM monday_sync_log ORDER BY id DESC LIMIT 1
+  `
+  const lastLog = logRows[0]
 
-  const { count } = db.prepare(
-    "SELECT COUNT(*) as count FROM clients WHERE arr IS NOT NULL OR monday_health IS NOT NULL"
-  ).get() as { count: number }
+  const [{ count }] = await sql<{ count: number }[]>`
+    SELECT COUNT(*)::int as count FROM clients WHERE arr IS NOT NULL OR monday_health IS NOT NULL
+  `
 
   const apiConfigured = isMondayConfigured()
   let status: 'api' | 'csv' | 'none' = 'none'

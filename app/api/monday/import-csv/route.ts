@@ -57,7 +57,7 @@ export async function POST(request: Request) {
   }
 
   // Full import
-  const result = upsertMondayRows(rows)
+  const result = await upsertMondayRows(rows)
   return NextResponse.json({
     ...result,
     mapped_columns: mappedCols,

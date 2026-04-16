@@ -1,52 +1,47 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { db } from '@/lib/db'
 import { calculateHealthScore, calculateBugScore, calculatePriorityScore, getDaysSince } from '@/lib/health'
-import { isPostHogConfigured, usageScoreFromSummary, daysSince as phDaysSince } from '@/lib/posthog'
+import { usageScoreFromSummary, daysSince as phDaysSince } from '@/lib/posthog'
 import type { UsageSummary } from '@/lib/types'
 
 export async function GET() {
-  const db = getDb()
+  const sql = await db()
 
-  const { bugCount } = db.prepare('SELECT COUNT(*) as bugCount FROM bugs').get() as { bugCount: number }
-  const hasBugData = bugCount > 0
+  const [{ bug_count }] = await sql<{ bug_count: number }[]>`SELECT COUNT(*)::int AS bug_count FROM bugs`
+  const hasBugData = bug_count > 0
 
-  // Check if any PostHog cache exists (matches stats/route.ts logic)
-  const hasPostHogData = !!(db.prepare(
-    "SELECT 1 FROM posthog_usage_cache WHERE metric_type='summary' LIMIT 1",
-  ).get())
-
-  const rows = db.prepare(`
+  const rows = await sql<Record<string, unknown>[]>`
     SELECT c.*,
            tp.date  AS last_touchpoint_date,
            tp.type  AS last_touchpoint_type,
            tp.notes AS last_touchpoint_notes,
-           COALESCE(bo.open_count,     0) AS open_bugs,
-           COALESCE(bo.critical_count, 0) AS critical_bugs,
-           COALESCE(bo.high_count,     0) AS high_bugs,
-           COALESCE(br.resolved_count, 0) AS resolved_bugs,
-           phc.value         AS phc_value,
+           COALESCE(bo.open_count,     0)::int AS open_bugs,
+           COALESCE(bo.critical_count, 0)::int AS critical_bugs,
+           COALESCE(bo.high_count,     0)::int AS high_bugs,
+           COALESCE(br.resolved_count, 0)::int AS resolved_bugs,
+           phc.value AS phc_value,
            COALESCE(
              (SELECT co.external_members FROM clerk_organizations co WHERE LOWER(TRIM(co.slug)) = LOWER(TRIM(c.client_code)) LIMIT 1),
              (SELECT co.external_members FROM clerk_organizations co WHERE LOWER(TRIM(c.client_code)) LIKE LOWER(TRIM(co.slug)) || '%' AND LENGTH(co.slug) >= 4 ORDER BY LENGTH(co.slug) DESC LIMIT 1)
            ) AS clerk_external_members
     FROM clients c
-    LEFT JOIN touchpoints tp ON tp.id = (
-      SELECT id FROM touchpoints
+    LEFT JOIN LATERAL (
+      SELECT date, type, notes FROM touchpoints
       WHERE client_id = c.id
       ORDER BY date DESC, created_at DESC
       LIMIT 1
-    )
+    ) tp ON TRUE
     LEFT JOIN (
       SELECT LOWER(TRIM(reported_by)) AS rby,
-             COUNT(*) AS open_count,
-             SUM(CASE WHEN priority = 'Critical' THEN 1 ELSE 0 END) AS critical_count,
-             SUM(CASE WHEN priority = 'High'     THEN 1 ELSE 0 END) AS high_count
+             COUNT(*)::int AS open_count,
+             SUM(CASE WHEN priority = 'Critical' THEN 1 ELSE 0 END)::int AS critical_count,
+             SUM(CASE WHEN priority = 'High'     THEN 1 ELSE 0 END)::int AS high_count
       FROM bugs
       WHERE status IN ('Open', 'In Progress', 'Testing')
       GROUP BY LOWER(TRIM(reported_by))
     ) bo ON LOWER(TRIM(c.client_code)) = bo.rby
     LEFT JOIN (
-      SELECT LOWER(TRIM(reported_by)) AS rby, COUNT(*) AS resolved_count
+      SELECT LOWER(TRIM(reported_by)) AS rby, COUNT(*)::int AS resolved_count
       FROM bugs
       WHERE status IN ('Fixed', 'Closed')
       GROUP BY LOWER(TRIM(reported_by))
@@ -57,7 +52,7 @@ export async function GET() {
      AND phc.user_type   = 'all'
      AND phc.period_days = 30
     ORDER BY c.name
-  `).all() as Record<string, unknown>[]
+  `
 
   const result = rows.map((c) => {
     // Parse PostHog cache
@@ -116,7 +111,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  const db = getDb()
+  const sql = await db()
   const body = await request.json()
   const { name, company, pm_assigned, contract_type, modules_active, market, status, notes, client_code, tier } = body
 
@@ -124,23 +119,23 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Name is required' }, { status: 400 })
   }
 
-  const result = db.prepare(`
+  const [newClient] = await sql`
     INSERT INTO clients (name, company, pm_assigned, contract_type, modules_active, market, status, notes, client_code, tier)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    name.trim(),
-    company || null,
-    pm_assigned || null,
-    contract_type || null,
-    modules_active?.length ? JSON.stringify(modules_active) : null,
-    market || null,
-    status || 'active',
-    notes || null,
-    client_code?.trim().toUpperCase() || null,
-    tier ? parseInt(tier) : 3,
-  )
+    VALUES (
+      ${name.trim()},
+      ${company || null},
+      ${pm_assigned || null},
+      ${contract_type || null},
+      ${modules_active?.length ? JSON.stringify(modules_active) : null},
+      ${market || null},
+      ${status || 'active'},
+      ${notes || null},
+      ${client_code?.trim().toUpperCase() || null},
+      ${tier ? parseInt(tier) : 3}
+    )
+    RETURNING *
+  `
 
-  const newClient = db.prepare('SELECT * FROM clients WHERE id = ?').get(result.lastInsertRowid) as Record<string, unknown>
   return NextResponse.json({
     ...newClient,
     modules_active: newClient.modules_active ? JSON.parse(newClient.modules_active as string) : [],

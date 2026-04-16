@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDb, recordSync } from '@/lib/db'
+import { db, recordSync } from '@/lib/db'
 
 const NOTION_VERSION = '2022-06-28'
 
@@ -61,7 +61,25 @@ function getRelationText(prop: unknown): string | null {
   return null // TODO: resolve in future iteration
 }
 
-function parseBug(page: NotionPage): Record<string, unknown> {
+interface ParsedBug {
+  id: string
+  bug_title: string
+  status: string | null
+  priority: string | null
+  modulo: string | null
+  tool: string | null
+  reported_by: string | null
+  client_tier: string | null
+  assigned_to: string | null
+  sprint: string | null
+  date_reported: string | null
+  due_date: string | null
+  tags: string
+  description: string | null
+  notion_url: string
+}
+
+function parseBug(page: NotionPage): ParsedBug {
   const p = page.properties
   return {
     id: page.id,
@@ -79,7 +97,6 @@ function parseBug(page: NotionPage): Record<string, unknown> {
     tags: JSON.stringify(getMultiSelect(p['Tags'])),
     description:  getText(p['Description'])  ?? null,
     notion_url:   `https://notion.so/${page.id.replace(/-/g, '')}`,
-    source: 'api',
   }
 }
 
@@ -91,7 +108,7 @@ export async function POST() {
     return NextResponse.json({ error: 'NOTION_TOKEN and NOTION_BUGS_DATABASE_ID not configured' }, { status: 400 })
   }
 
-  const db = getDb()
+  const sql = await db()
   const pages: NotionPage[] = []
 
   // Paginated fetch — Notion returns max 100 per request
@@ -129,28 +146,41 @@ export async function POST() {
     cursor = data.next_cursor
   }
 
-  // Upsert into bugs table
-  const upsert = db.prepare(`
-    INSERT OR REPLACE INTO bugs
-      (id, bug_title, status, priority, modulo, tool, reported_by, client_tier,
-       assigned_to, sprint, date_reported, due_date, tags, description, notion_url, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'api')
-  `)
-
+  // Upsert into bugs table — use a single transaction for atomicity
   let synced = 0
-  const syncAll = db.transaction(() => {
+  await sql.begin(async (tsql) => {
     for (const page of pages) {
       const b = parseBug(page)
-      upsert.run(
-        b.id, b.bug_title, b.status, b.priority, b.modulo, b.tool,
-        b.reported_by, b.client_tier, b.assigned_to, b.sprint,
-        b.date_reported, b.due_date, b.tags, b.description, b.notion_url,
-      )
+      await tsql`
+        INSERT INTO bugs
+          (id, bug_title, status, priority, modulo, tool, reported_by, client_tier,
+           assigned_to, sprint, date_reported, due_date, tags, description, notion_url, source)
+        VALUES (
+          ${b.id}, ${b.bug_title}, ${b.status}, ${b.priority}, ${b.modulo}, ${b.tool},
+          ${b.reported_by}, ${b.client_tier}, ${b.assigned_to}, ${b.sprint},
+          ${b.date_reported}, ${b.due_date}, ${b.tags}, ${b.description}, ${b.notion_url}, 'api'
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          bug_title     = EXCLUDED.bug_title,
+          status        = EXCLUDED.status,
+          priority      = EXCLUDED.priority,
+          modulo        = EXCLUDED.modulo,
+          tool          = EXCLUDED.tool,
+          reported_by   = EXCLUDED.reported_by,
+          client_tier   = EXCLUDED.client_tier,
+          assigned_to   = EXCLUDED.assigned_to,
+          sprint        = EXCLUDED.sprint,
+          date_reported = EXCLUDED.date_reported,
+          due_date      = EXCLUDED.due_date,
+          tags          = EXCLUDED.tags,
+          description   = EXCLUDED.description,
+          notion_url    = EXCLUDED.notion_url,
+          source        = 'api'
+      `
       synced++
     }
   })
-  syncAll()
-  recordSync('notion', 'api', synced)
+  await recordSync('notion', 'api', synced)
 
   return NextResponse.json({ synced, total: pages.length })
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
-import { getDb, recordSync } from '@/lib/db'
+import { db, recordSync } from '@/lib/db'
 
 const NOTION_VERSION = '2022-06-28'
 const LOOKBACK_MONTHS = 6
@@ -191,7 +191,7 @@ export async function POST() {
     )
   }
 
-  const db = getDb()
+  const sql = await db()
 
   // Filter: only last 6 months
   const cutoff = new Date()
@@ -199,9 +199,9 @@ export async function POST() {
   const cutoffStr = cutoff.toISOString().slice(0, 10)
 
   // Existing transcripts → delta sync via last_edited_time
-  const existingRows = db.prepare(
-    'SELECT notion_page_id, last_edited_time FROM feedback_transcripts',
-  ).all() as { notion_page_id: string; last_edited_time: string }[]
+  const existingRows = await sql<{ notion_page_id: string; last_edited_time: string }[]>`
+    SELECT notion_page_id, last_edited_time FROM feedback_transcripts
+  `
   const existingMap = new Map(existingRows.map((r) => [r.notion_page_id, r.last_edited_time]))
 
   // Paginated query of the Notion database
@@ -269,26 +269,18 @@ export async function POST() {
   }
 
   // Preload existing rows to keep transcript_text/summary when not refetched
-  const existingRowsDetail = db.prepare(
-    'SELECT notion_page_id, transcript_text, transcript_summary FROM feedback_transcripts',
-  ).all() as { notion_page_id: string; transcript_text: string | null; transcript_summary: string | null }[]
+  const existingRowsDetail = await sql<{ notion_page_id: string; transcript_text: string | null; transcript_summary: string | null }[]>`
+    SELECT notion_page_id, transcript_text, transcript_summary FROM feedback_transcripts
+  `
   const existingDetailMap = new Map(
     existingRowsDetail.map((r) => [r.notion_page_id, { text: r.transcript_text, summary: r.transcript_summary }]),
   )
-
-  // Upsert all pages
-  const upsert = db.prepare(`
-    INSERT OR REPLACE INTO feedback_transcripts
-      (notion_page_id, client_code, client_name, session_id, session_date,
-       status, products, transcript_text, transcript_summary, last_edited_time, imported_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-  `)
 
   let synced = 0
   let refreshed = 0
   let summarized = 0
 
-  const tx = db.transaction(() => {
+  await sql.begin(async (tsql) => {
     for (const page of allPages) {
       const props = page.properties
       const clientName = getTitle(props['Client'])
@@ -308,24 +300,30 @@ export async function POST() {
       if (fetchedText !== undefined) refreshed++
       if (fetchedSummary !== undefined) summarized++
 
-      upsert.run(
-        page.id,
-        clientCode?.toUpperCase() ?? null,
-        clientName,
-        sessionId,
-        sessionDate,
-        status,
-        products,
-        finalText,
-        finalSummary,
-        page.last_edited_time,
-      )
+      await tsql`
+        INSERT INTO feedback_transcripts
+          (notion_page_id, client_code, client_name, session_id, session_date,
+           status, products, transcript_text, transcript_summary, last_edited_time, imported_at)
+        VALUES (${page.id}, ${clientCode?.toUpperCase() ?? null}, ${clientName}, ${sessionId},
+                ${sessionDate}, ${status}, ${products}, ${finalText}, ${finalSummary},
+                ${page.last_edited_time}, NOW())
+        ON CONFLICT (notion_page_id) DO UPDATE SET
+          client_code        = EXCLUDED.client_code,
+          client_name        = EXCLUDED.client_name,
+          session_id         = EXCLUDED.session_id,
+          session_date       = EXCLUDED.session_date,
+          status             = EXCLUDED.status,
+          products           = EXCLUDED.products,
+          transcript_text    = EXCLUDED.transcript_text,
+          transcript_summary = EXCLUDED.transcript_summary,
+          last_edited_time   = EXCLUDED.last_edited_time,
+          imported_at        = EXCLUDED.imported_at
+      `
       synced++
     }
   })
-  tx()
 
-  recordSync('notion', 'transcripts', synced, `${refreshed} refreshed, ${summarized} summarized`)
+  await recordSync('notion', 'transcripts', synced, `${refreshed} refreshed, ${summarized} summarized`)
 
   return NextResponse.json({
     total: allPages.length,

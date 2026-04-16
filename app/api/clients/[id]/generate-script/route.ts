@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
-import { getDb } from '@/lib/db'
+import { db } from '@/lib/db'
 import type { UsageSummary } from '@/lib/types'
 
 const MODEL = 'claude-sonnet-4-6'
@@ -48,35 +48,38 @@ function daysBetween(iso: string | null): number | null {
   return Math.floor((Date.now() - new Date(iso).getTime()) / 86400000)
 }
 
-function buildContext(clientId: number): ClientContext | null {
-  const db = getDb()
+async function buildContext(clientId: number): Promise<ClientContext | null> {
+  const sql = await db()
 
-  const client = db.prepare(`
+  const [client] = await sql<ClientContext['client'][]>`
     SELECT id, name, client_code, tier, arr, products, service_end,
            client_manager, am_owner, potential_churn
-    FROM clients WHERE id = ?
-  `).get(clientId) as ClientContext['client'] | undefined
+    FROM clients WHERE id = ${clientId}
+  `
   if (!client) return null
 
-  const tp = db.prepare(`
+  const tpRows = await sql<{ date: string; type: string; notes: string | null }[]>`
     SELECT date, type, notes FROM touchpoints
-    WHERE client_id = ? ORDER BY date DESC, created_at DESC LIMIT 1
-  `).get(clientId) as { date: string; type: string; notes: string | null } | undefined
+    WHERE client_id = ${clientId} ORDER BY date DESC, created_at DESC LIMIT 1
+  `
+  const tp = tpRows[0]
 
-  const bugs = db.prepare(`
+  const bugsRows = await sql<{ open_count: number; critical_count: number; high_count: number; resolved_count: number }[]>`
     SELECT
-      SUM(CASE WHEN status IN ('Open','In Progress','Testing') THEN 1 ELSE 0 END) AS open_count,
-      SUM(CASE WHEN status IN ('Open','In Progress','Testing') AND priority = 'Critical' THEN 1 ELSE 0 END) AS critical_count,
-      SUM(CASE WHEN status IN ('Open','In Progress','Testing') AND priority = 'High' THEN 1 ELSE 0 END) AS high_count,
-      SUM(CASE WHEN status IN ('Fixed','Closed') THEN 1 ELSE 0 END) AS resolved_count
-    FROM bugs WHERE LOWER(TRIM(reported_by)) = LOWER(TRIM(?))
-  `).get(client.client_code) as { open_count: number; critical_count: number; high_count: number; resolved_count: number } | undefined
+      SUM(CASE WHEN status IN ('Open','In Progress','Testing') THEN 1 ELSE 0 END)::int AS open_count,
+      SUM(CASE WHEN status IN ('Open','In Progress','Testing') AND priority = 'Critical' THEN 1 ELSE 0 END)::int AS critical_count,
+      SUM(CASE WHEN status IN ('Open','In Progress','Testing') AND priority = 'High' THEN 1 ELSE 0 END)::int AS high_count,
+      SUM(CASE WHEN status IN ('Fixed','Closed') THEN 1 ELSE 0 END)::int AS resolved_count
+    FROM bugs WHERE LOWER(TRIM(reported_by)) = LOWER(TRIM(${client.client_code}))
+  `
+  const bugs = bugsRows[0]
 
-  const phRow = db.prepare(`
+  const phRows = await sql<{ value: string }[]>`
     SELECT value FROM posthog_usage_cache
-    WHERE LOWER(TRIM(client_code)) = LOWER(TRIM(?))
+    WHERE LOWER(TRIM(client_code)) = LOWER(TRIM(${client.client_code}))
       AND metric_type = 'summary' AND user_type = 'all' AND period_days = 30
-  `).get(client.client_code) as { value: string } | undefined
+  `
+  const phRow = phRows[0]
 
   let usage: ClientContext['usage'] = {
     adoption_level: null,
@@ -118,16 +121,16 @@ function buildContext(clientId: number): ClientContext | null {
     } catch { /* ignore */ }
   }
 
-  const transcripts = db.prepare(`
-    SELECT session_date, session_id, products, transcript_text, transcript_summary
-    FROM feedback_transcripts
-    WHERE LOWER(TRIM(client_code)) = LOWER(TRIM(?))
-    ORDER BY session_date DESC
-    LIMIT ?
-  `).all(client.client_code, MAX_TRANSCRIPTS) as Array<{
+  const transcripts = await sql<Array<{
     session_date: string; session_id: string | null; products: string | null;
     transcript_text: string | null; transcript_summary: string | null
-  }>
+  }>>`
+    SELECT session_date, session_id, products, transcript_text, transcript_summary
+    FROM feedback_transcripts
+    WHERE LOWER(TRIM(client_code)) = LOWER(TRIM(${client.client_code}))
+    ORDER BY session_date DESC
+    LIMIT ${MAX_TRANSCRIPTS}
+  `
 
   // Hybrid: first (most recent) transcript = full text, older ones = summary
   const transcriptsContext = transcripts.map((t, idx) => {
@@ -271,7 +274,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const apiKey = process.env.ANTHROPIC_API_KEY
   if (!apiKey) return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 500 })
 
-  const ctx = buildContext(clientId)
+  const ctx = await buildContext(clientId)
   if (!ctx) return NextResponse.json({ error: 'Client not found' }, { status: 404 })
 
   const skeleton = buildSkeleton(ctx)

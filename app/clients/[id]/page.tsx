@@ -690,7 +690,7 @@ function ModuleComparisonCard({ client, clerkRawMetadata, posthogModules, clerkL
                 <tr key={e.key} className="border-b hover:bg-slate-800/30 transition-colors" style={{ borderColor: '#1e293b' }}>
                   <td className="px-4 py-2 text-slate-300 font-medium">{e.label}</td>
                   <td className="px-3 py-2 text-center">
-                    {e.mondayField === null
+                    {e.productsTags.length === 0
                       ? <span className="text-slate-600">—</span>
                       : e.paid
                         ? <span className="font-bold text-green-400">Y</span>

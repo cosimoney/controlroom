@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { db } from '@/lib/db'
 
 // Contact cadence by tier (days between contacts)
 const CADENCE: Record<number, number> = { 1: 30, 2: 45, 3: 60 }
@@ -40,40 +40,46 @@ function addDays(d: Date, n: number): Date {
 }
 
 export async function GET() {
-  const db = getDb()
+  const sql = await db()
 
-  const clients = db.prepare(`
-    SELECT c.id, c.name, c.client_code, c.tier, c.arr, c.service_end, c.potential_churn,
-           tp.date AS last_touchpoint_date,
-           COALESCE(bo.open_count, 0) AS open_bugs,
-           COALESCE(bo.critical_count, 0) AS critical_bugs,
-           COALESCE(bo.high_count, 0) AS high_bugs,
-           (SELECT co.external_members FROM clerk_organizations co WHERE LOWER(TRIM(co.slug)) = LOWER(TRIM(c.client_code)) LIMIT 1) AS clerk_ext
-    FROM clients c
-    LEFT JOIN touchpoints tp ON tp.id = (
-      SELECT id FROM touchpoints WHERE client_id = c.id
-      ORDER BY date DESC, created_at DESC LIMIT 1
-    )
-    LEFT JOIN (
-      SELECT LOWER(TRIM(reported_by)) AS rby,
-             COUNT(*) AS open_count,
-             SUM(CASE WHEN priority='Critical' THEN 1 ELSE 0 END) AS critical_count,
-             SUM(CASE WHEN priority='High' THEN 1 ELSE 0 END) AS high_count
-      FROM bugs WHERE status IN ('Open','In Progress','Testing')
-      GROUP BY LOWER(TRIM(reported_by))
-    ) bo ON LOWER(TRIM(c.client_code)) = bo.rby
-    WHERE c.status = 'active' AND c.client_code IS NOT NULL
-  `).all() as {
+  const clients = await sql<{
     id: number; name: string; client_code: string; tier: number | null; arr: number | null;
     service_end: string | null; potential_churn: string | null;
     last_touchpoint_date: string | null;
     open_bugs: number; critical_bugs: number; high_bugs: number;
     clerk_ext: number | null;
-  }[]
+  }[]>`
+    SELECT c.id, c.name, c.client_code, c.tier, c.arr, c.service_end, c.potential_churn,
+           tp.date AS last_touchpoint_date,
+           COALESCE(bo.open_count, 0)::int AS open_bugs,
+           COALESCE(bo.critical_count, 0)::int AS critical_bugs,
+           COALESCE(bo.high_count, 0)::int AS high_bugs,
+           (SELECT co.external_members FROM clerk_organizations co WHERE LOWER(TRIM(co.slug)) = LOWER(TRIM(c.client_code)) LIMIT 1) AS clerk_ext
+    FROM clients c
+    LEFT JOIN LATERAL (
+      SELECT date FROM touchpoints WHERE client_id = c.id
+      ORDER BY date DESC, created_at DESC LIMIT 1
+    ) tp ON TRUE
+    LEFT JOIN (
+      SELECT LOWER(TRIM(reported_by)) AS rby,
+             COUNT(*)::int AS open_count,
+             SUM(CASE WHEN priority='Critical' THEN 1 ELSE 0 END)::int AS critical_count,
+             SUM(CASE WHEN priority='High' THEN 1 ELSE 0 END)::int AS high_count
+      FROM bugs WHERE status IN ('Open','In Progress','Testing')
+      GROUP BY LOWER(TRIM(reported_by))
+    ) bo ON LOWER(TRIM(c.client_code)) = bo.rby
+    WHERE c.status = 'active' AND c.client_code IS NOT NULL
+  `
 
   const now = new Date()
   const thisWeekStart = startOfWeek(now)
   const thisWeekStartStr = thisWeekStart.toISOString().slice(0, 10)
+
+  // Prefetch all touchpoints since Monday — avoids N+1 queries inside the loop
+  const contactedRows = await sql<{ client_id: number }[]>`
+    SELECT DISTINCT client_id FROM touchpoints WHERE date >= ${thisWeekStartStr}
+  `
+  const contactedSet = new Set(contactedRows.map((r) => Number(r.client_id)))
 
   const rawItems: AgendaItem[] = []
 
@@ -171,11 +177,6 @@ export async function GET() {
 
     if (tier === 1 && priority === 'low') priority = 'medium'
 
-    // Check if already contacted this week (feedback-type touchpoint since Monday)
-    const contacted = db.prepare(
-      `SELECT 1 FROM touchpoints WHERE client_id = ? AND date >= ? LIMIT 1`
-    ).get(c.id, thisWeekStartStr) as { 1: number } | undefined
-
     rawItems.push({
       client_id: c.id,
       client_name: c.name,
@@ -188,7 +189,7 @@ export async function GET() {
       weeks_from_now: weeksFromNow,
       reasons,
       priority,
-      contacted_this_week: !!contacted,
+      contacted_this_week: contactedSet.has(Number(c.id)),
       rolled_over: rolledOver,
       score,
     })

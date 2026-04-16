@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { isPostHogConfigured, getOrSyncUsage, getUsageFromCache, usageScoreFromSummary } from '@/lib/posthog'
-import { getDb } from '@/lib/db'
+import { db } from '@/lib/db'
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
@@ -24,18 +24,20 @@ export async function GET(request: Request) {
   }
 
   // All clients — read from cache only (no bulk auto-sync on GET)
-  const db = getDb()
-  const clients = db.prepare(
-    'SELECT client_code FROM clients WHERE client_code IS NOT NULL',
-  ).all() as { client_code: string }[]
+  const sql = await db()
+  const clients = await sql<{ client_code: string }[]>`
+    SELECT client_code FROM clients WHERE client_code IS NOT NULL
+  `
 
-  const result: Record<string, unknown> = {}
-  for (const { client_code } of clients) {
-    const cached = getUsageFromCache(client_code, days)
-    result[client_code] = cached
-      ? { ...cached, usage_score: usageScoreFromSummary(cached) }
-      : null
-  }
+  const entries = await Promise.all(
+    clients.map(async ({ client_code }) => {
+      const cached = await getUsageFromCache(client_code, days)
+      return [
+        client_code,
+        cached ? { ...cached, usage_score: usageScoreFromSummary(cached) } : null,
+      ] as const
+    }),
+  )
 
-  return NextResponse.json(result)
+  return NextResponse.json(Object.fromEntries(entries))
 }

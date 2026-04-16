@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { db } from '@/lib/db'
 
 export async function POST(request: Request) {
-  const db = getDb()
+  const sql = await db()
   const body = await request.json()
   const { rows } = body as { rows: Record<string, string>[] }
 
@@ -10,15 +10,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'No rows provided' }, { status: 400 })
   }
 
-  const insertClient = db.prepare(`
-    INSERT INTO clients (name, company, pm_assigned, contract_type, modules_active, market, status, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-  `)
-
   let imported = 0
   const errors: string[] = []
 
-  const insertMany = db.transaction(() => {
+  await sql.begin(async (tsql) => {
     for (const row of rows) {
       if (!row.name?.trim()) {
         errors.push(`Skipped row: missing name`)
@@ -31,18 +26,19 @@ export async function POST(request: Request) {
           const arr = modulesRaw.split(',').map((s) => s.trim()).filter(Boolean)
           modulesJson = JSON.stringify(arr)
         }
-        insertClient.run(
-          row.name.trim(),
-          row.company || null,
-          row.pm_assigned || null,
-          row.contract_type || null,
-          modulesJson,
-          row.market || null,
-          ['active', 'churned', 'onboarding', 'paused'].includes(row.status)
-            ? row.status
-            : 'active',
-          row.notes || null,
-        )
+        await tsql`
+          INSERT INTO clients (name, company, pm_assigned, contract_type, modules_active, market, status, notes)
+          VALUES (
+            ${row.name.trim()},
+            ${row.company || null},
+            ${row.pm_assigned || null},
+            ${row.contract_type || null},
+            ${modulesJson},
+            ${row.market || null},
+            ${['active', 'churned', 'onboarding', 'paused'].includes(row.status) ? row.status : 'active'},
+            ${row.notes || null}
+          )
+        `
         imported++
       } catch (e) {
         errors.push(`Error on row "${row.name}": ${e}`)
@@ -50,6 +46,5 @@ export async function POST(request: Request) {
     }
   })
 
-  insertMany()
   return NextResponse.json({ imported, errors })
 }

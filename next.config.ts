@@ -1,8 +1,8 @@
 import type { NextConfig } from 'next'
 
 const nextConfig: NextConfig = {
-  // Tell Next.js not to bundle better-sqlite3 (native Node.js module)
-  serverExternalPackages: ['better-sqlite3', 'xlsx'],
+  // xlsx uses dynamic requires — must stay external
+  serverExternalPackages: ['xlsx'],
   turbopack: {
     root: '.',
   },

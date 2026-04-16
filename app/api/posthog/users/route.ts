@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { isPostHogConfigured } from '@/lib/posthog'
-import { getDb } from '@/lib/db'
+import { db } from '@/lib/db'
 
 const POSTHOG_HOST       = process.env.POSTHOG_HOST ?? 'https://eu.posthog.com'
 const POSTHOG_API_KEY    = process.env.POSTHOG_API_KEY
@@ -80,14 +80,14 @@ export async function GET(request: Request) {
     durationMap.set(key, Math.round(Number(r[2] ?? 0)))
   }
 
-  // Enrich with client data (name, tier) from SQLite
-  const db = getDb()
+  // Enrich with client data (name, tier) from Postgres
+  const sql = await db()
+  const clientRows = await sql<{ id: number; name: string; client_code: string; tier: number | null }[]>`
+    SELECT id, name, client_code, tier FROM clients
+    WHERE client_code IS NOT NULL
+  `
   const clientMap = new Map<string, { id: number; name: string; tier: number | null }>(
-    (db.prepare(`
-      SELECT id, name, client_code, tier FROM clients
-      WHERE client_code IS NOT NULL
-    `).all() as { id: number; name: string; client_code: string; tier: number | null }[])
-    .map((c) => [c.client_code.toLowerCase(), c])
+    clientRows.map((c) => [c.client_code.toLowerCase(), c]),
   )
 
   const users = rows.map((r) => {

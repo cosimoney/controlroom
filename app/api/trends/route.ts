@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { isPostHogConfigured, isInternalUser } from '@/lib/posthog'
-import { getDb } from '@/lib/db'
+import { db } from '@/lib/db'
 
 const POSTHOG_HOST       = process.env.POSTHOG_HOST ?? 'https://eu.posthog.com'
 const POSTHOG_API_KEY    = process.env.POSTHOG_API_KEY
@@ -113,12 +113,12 @@ export async function GET(request: Request) {
     arr[NUM_WEEKS - 1 - weeksAgo] += sess
   }
 
-  // Enrich with client data from SQLite
-  const db = getDb()
-  const clients = db.prepare(`
+  // Enrich with client data from Postgres
+  const sql = await db()
+  const clients = await sql<{ id: number; name: string; client_code: string; tier: number | null; arr: number | null }[]>`
     SELECT id, name, client_code, tier, arr FROM clients
     WHERE status = 'active' AND client_code IS NOT NULL
-  `).all() as { id: number; name: string; client_code: string; tier: number | null; arr: number | null }[]
+  `
 
   const results = clients.map((c) => {
     const code = c.client_code.toLowerCase()

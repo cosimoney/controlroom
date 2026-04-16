@@ -2,11 +2,11 @@
  * lib/posthog.ts — PostHog EU Cloud API client
  *
  * Uses the PostHog REST API (EU region: https://eu.posthog.com).
- * All data is cached in the local SQLite posthog_usage_cache table (TTL 30 min).
- * This file is SERVER-ONLY (uses better-sqlite3 via getDb()).
+ * All data is cached in the Postgres posthog_usage_cache table (TTL 30 min).
+ * This file is SERVER-ONLY (uses postgres.js via db()).
  */
 
-import { getDb } from './db'
+import { db } from './db'
 import { computeAdoptionLevel, computeUsageScore } from './health'
 import type { AdoptionLevel, UsageSummary, UserActivity } from './types'
 
@@ -299,31 +299,31 @@ export async function syncClientUsage(clientCode: string, days = 30): Promise<Us
   }
 
   // 7. Persist to cache (upsert)
-  storeSummaryInCache(code, summary, days)
+  await storeSummaryInCache(code, summary, days)
 
   return summary
 }
 
 // ─── Cache helpers ────────────────────────────────────────────────────
 
-function storeSummaryInCache(clientCode: string, summary: UsageSummary, days: number): void {
-  const db = getDb()
-  db.prepare(`
+async function storeSummaryInCache(clientCode: string, summary: UsageSummary, days: number): Promise<void> {
+  const sql = await db()
+  await sql`
     INSERT INTO posthog_usage_cache (client_code, metric_type, user_type, value, period_days, last_synced_at)
-    VALUES (?, 'summary', 'all', ?, ?, ?)
+    VALUES (${clientCode}, 'summary', 'all', ${JSON.stringify(summary)}, ${days}, NOW())
     ON CONFLICT (client_code, metric_type, user_type, period_days) DO UPDATE SET
-      value = excluded.value, last_synced_at = excluded.last_synced_at
-  `).run(clientCode, JSON.stringify(summary), days, new Date().toISOString())
+      value = EXCLUDED.value, last_synced_at = EXCLUDED.last_synced_at
+  `
 }
 
 /** Read the cached summary row; returns null if missing or expired (TTL 30 min). */
-export function getUsageFromCache(clientCode: string, days = 30): UsageSummary | null {
-  const db = getDb()
-  const row = db.prepare(`
-    SELECT value, last_synced_at FROM posthog_usage_cache
-    WHERE client_code = ? AND metric_type = 'summary' AND user_type = 'all' AND period_days = ?
-  `).get(clientCode.toUpperCase(), days) as { value: string; last_synced_at: string } | undefined
-
+export async function getUsageFromCache(clientCode: string, days = 30): Promise<UsageSummary | null> {
+  const sql = await db()
+  const rows = await sql<{ value: string; last_synced_at: string }[]>`
+    SELECT value, last_synced_at::text FROM posthog_usage_cache
+    WHERE client_code = ${clientCode.toUpperCase()} AND metric_type = 'summary' AND user_type = 'all' AND period_days = ${days}
+  `
+  const row = rows[0]
   if (!row) return null
 
   const age = Date.now() - new Date(row.last_synced_at).getTime()
@@ -333,12 +333,13 @@ export function getUsageFromCache(clientCode: string, days = 30): UsageSummary |
 }
 
 /** Read cache even if stale (for fallback). */
-function getStaleCacheValue(clientCode: string, days = 30): UsageSummary | null {
-  const db = getDb()
-  const row = db.prepare(`
+async function getStaleCacheValue(clientCode: string, days = 30): Promise<UsageSummary | null> {
+  const sql = await db()
+  const rows = await sql<{ value: string }[]>`
     SELECT value FROM posthog_usage_cache
-    WHERE client_code = ? AND metric_type = 'summary' AND user_type = 'all' AND period_days = ?
-  `).get(clientCode.toUpperCase(), days) as { value: string } | undefined
+    WHERE client_code = ${clientCode.toUpperCase()} AND metric_type = 'summary' AND user_type = 'all' AND period_days = ${days}
+  `
+  const row = rows[0]
   if (!row) return null
   try { return JSON.parse(row.value) as UsageSummary } catch { return null }
 }
@@ -350,23 +351,23 @@ function getStaleCacheValue(clientCode: string, days = 30): UsageSummary | null 
 export async function getOrSyncUsage(clientCode: string, days = 30): Promise<UsageSummary | null> {
   if (!isPostHogConfigured()) return null
 
-  const cached = getUsageFromCache(clientCode, days)
+  const cached = await getUsageFromCache(clientCode, days)
   if (cached) return cached
 
   try {
     return await syncClientUsage(clientCode, days)
   } catch {
-    return getStaleCacheValue(clientCode, days)
+    return await getStaleCacheValue(clientCode, days)
   }
 }
 
 // ─── Bulk sync (all clients) ──────────────────────────────────────────
 
 export async function syncAllClients(days = 30): Promise<{ synced: number; errors: string[] }> {
-  const db = getDb()
-  const clients = db.prepare(
-    'SELECT client_code FROM clients WHERE client_code IS NOT NULL',
-  ).all() as { client_code: string }[]
+  const sql = await db()
+  const clients = await sql<{ client_code: string }[]>`
+    SELECT client_code FROM clients WHERE client_code IS NOT NULL
+  `
 
   let synced = 0
   const errors: string[] = []

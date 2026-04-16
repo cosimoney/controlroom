@@ -1,28 +1,28 @@
 import { NextResponse } from 'next/server'
-import { getDb } from '@/lib/db'
+import { db } from '@/lib/db'
 import { getModuleSignal, MODULE_CROSS_MAP, hasProductTag } from '@/lib/modules'
 
 export async function GET() {
-  const db = getDb()
+  const sql = await db()
 
   // Load all active clients with products column
-  const clients = db.prepare(`
+  const clients = await sql<{ id: number; name: string; client_code: string; tier: number | null; arr: number | null; products: string | null }[]>`
     SELECT id, name, client_code, tier, arr, products
     FROM clients
     WHERE status = 'active' AND client_code IS NOT NULL
-  `).all() as { id: number; name: string; client_code: string; tier: number | null; arr: number | null; products: string | null }[]
+  `
 
   // Load Clerk org modules (keyed by lowercase slug)
-  const clerkOrgs = db.prepare(`
+  const clerkOrgs = await sql<{ slug: string; modules_enabled: string }[]>`
     SELECT slug, modules_enabled FROM clerk_organizations
-  `).all() as { slug: string; modules_enabled: string }[]
+  `
   const clerkMap = new Map(clerkOrgs.map((o) => [o.slug.toLowerCase(), JSON.parse(o.modules_enabled || '[]') as string[]]))
 
   // Load PostHog module breakdown (from cache — use modules field in the summary JSON)
-  const phRows = db.prepare(`
+  const phRows = await sql<{ client_code: string; value: string }[]>`
     SELECT client_code, value FROM posthog_usage_cache
     WHERE metric_type = 'summary' AND user_type = 'all' AND period_days = 30
-  `).all() as { client_code: string; value: string }[]
+  `
   const phMap = new Map<string, Record<string, number>>()
   for (const row of phRows) {
     try {
