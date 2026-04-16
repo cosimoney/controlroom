@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server'
 import Anthropic from '@anthropic-ai/sdk'
 import { db, recordSync } from '@/lib/db'
 
+// AI summary generation per transcript ~3-5s × ~40 transcripts = up to 3 min on first sync.
+export const maxDuration = 60
+
 const NOTION_VERSION = '2022-06-28'
 const LOOKBACK_MONTHS = 6
 const SUMMARY_MODEL = 'claude-sonnet-4-6'

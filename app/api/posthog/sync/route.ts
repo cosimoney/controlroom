@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 import { isPostHogConfigured, syncAllClients } from '@/lib/posthog'
 import { recordSync } from '@/lib/db'
 
+// Vercel Hobby plan: 60s max. PostHog sync hits ~50 clients × ~10s each.
+// Pro plan supports up to 300s. Increase if needed when upgraded.
+export const maxDuration = 60
+
 export async function POST() {
   if (!isPostHogConfigured()) {
     return NextResponse.json(
