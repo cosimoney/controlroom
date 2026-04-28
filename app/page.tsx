@@ -306,7 +306,7 @@ export default function DashboardPage() {
         {/* Stats row — cliccabili come filtri rapidi */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-2">
           <KpiCard icon={<Users className="h-4 w-4 text-indigo-400" />}         label="Clienti attivi"        value={stats.totalActive}           color="text-white"        filterId="active"        active={activeKpiFilter} onToggle={setActiveKpiFilter} />
-          <KpiCard icon={<AlertTriangle className="h-4 w-4 text-yellow-400" />} label="Da contattare (>30gg)" value={stats.toContact}             color="text-yellow-400"   filterId="to_contact"    active={activeKpiFilter} onToggle={setActiveKpiFilter} />
+          <KpiCard icon={<AlertTriangle className="h-4 w-4 text-yellow-400" />} label="To contact (>30gg)" value={stats.toContact}             color="text-yellow-400"   filterId="to_contact"    active={activeKpiFilter} onToggle={setActiveKpiFilter} />
           <KpiCard icon={<AlertCircle className="h-4 w-4 text-red-400" />}      label="Critici (>60gg)"       value={stats.critical}              color="text-red-400"      filterId="critical"      active={activeKpiFilter} onToggle={setActiveKpiFilter} />
           <KpiCard icon={<span className="text-xs font-bold" style={{ color: '#97C459' }}>T1</span>} label="Tier 1 a rischio" value={stats.tier1AtRisk} color="text-red-400" filterId="tier1_risk"   active={activeKpiFilter} onToggle={setActiveKpiFilter} />
           {stats.hasMondayData && <>
