@@ -262,31 +262,41 @@ export default function DashboardPage() {
     <div className="min-h-screen" style={{ background: '#020617' }}>
       {/* Nav */}
       <header className="border-b sticky top-0 z-40" style={{ borderColor: '#1e293b', background: 'rgba(2,6,23,0.9)', backdropFilter: 'blur(8px)' }}>
-        <div className="max-w-[1600px] mx-auto px-4 py-3 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-lg font-bold text-white tracking-tight">CSM Command Center</span>
-            <span className="text-xs text-slate-500 hidden sm:inline">· Witailer Studio</span>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end">
-            {/* Monday badge */}
+        <div className="max-w-[1600px] mx-auto px-4 py-2 flex items-center gap-3">
+          {/* Title */}
+          <span className="text-sm font-bold text-white tracking-tight shrink-0">CSM</span>
+
+          {/* Sync badges — compact */}
+          <div className="flex items-center gap-1.5 shrink-0">
             <MondayBadge status={stats.mondayStatus} hasMondayData={stats.hasMondayData} lastSync={stats.lastMondaySync} onSync={handleMondaySync} syncing={syncingMonday} />
-            {/* Notion badge */}
             <NotionBadge status={stats.notionStatus} lastSync={stats.lastNotionSync} onSync={handleNotionSync} syncing={syncingNotion} />
-            {/* PostHog badge */}
             <PostHogBadge status={stats.posthogStatus} lastSync={stats.lastPosthogSync} onSync={handlePostHogSync} syncing={syncingPH} />
-            {/* Clerk badge */}
             <ClerkBadge status={stats.clerkStatus} lastSync={stats.lastClerkSync} onSync={handleClerkSync} syncing={syncingClerk} />
-            <button onClick={handleRefreshAll} disabled={syncingAll} title="Sync tutto" className="h-9 w-9 flex items-center justify-center rounded-md text-slate-400 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50">
-              <RefreshCw className={`h-4 w-4 ${syncingAll ? 'animate-spin' : ''}`} />
+            <button onClick={handleRefreshAll} disabled={syncingAll} title="Sync tutto" className="h-7 w-7 flex items-center justify-center rounded text-slate-500 hover:text-white hover:bg-slate-800 transition-colors disabled:opacity-50">
+              <RefreshCw className={`h-3.5 w-3.5 ${syncingAll ? 'animate-spin' : ''}`} />
             </button>
+          </div>
+
+          {/* Separator */}
+          <div className="h-4 w-px bg-slate-700 shrink-0" />
+
+          {/* Nav links */}
+          <nav className="flex items-center gap-3 shrink-0">
             <Link href="/agenda" className="text-xs text-slate-400 hover:text-white transition-colors">Agenda</Link>
             <Link href="/users" className="text-xs text-slate-400 hover:text-white transition-colors">Top Users</Link>
             <Link href="/modules" className="text-xs text-slate-400 hover:text-white transition-colors">Moduli</Link>
             <Link href="/trends" className="text-xs text-slate-400 hover:text-white transition-colors">Trends</Link>
-            <Link href="/contracts"><Button variant="outline" size="sm"><FileText className="h-3.5 w-3.5" />Contratti</Button></Link>
-            <Link href="/bugs"><Button variant="outline" size="sm"><Bug className="h-3.5 w-3.5" />Bug</Button></Link>
-            <Link href="/import"><Button variant="outline" size="sm">Import CSV</Button></Link>
-            <Link href="/clients/new"><Button size="sm"><Plus className="h-4 w-4" />Nuovo cliente</Button></Link>
+          </nav>
+
+          {/* Separator */}
+          <div className="h-4 w-px bg-slate-700 shrink-0" />
+
+          {/* Action buttons */}
+          <div className="flex items-center gap-1.5 ml-auto shrink-0">
+            <Link href="/contracts"><Button variant="outline" size="sm" className="h-7 text-xs px-2"><FileText className="h-3 w-3" />Contratti</Button></Link>
+            <Link href="/bugs"><Button variant="outline" size="sm" className="h-7 text-xs px-2"><Bug className="h-3 w-3" />Bug</Button></Link>
+            <Link href="/import"><Button variant="outline" size="sm" className="h-7 text-xs px-2">Import CSV</Button></Link>
+            <Link href="/clients/new"><Button size="sm" className="h-7 text-xs px-2"><Plus className="h-3 w-3" />Nuovo</Button></Link>
             <LogoutButton />
           </div>
         </div>
@@ -610,34 +620,25 @@ function MondayBadge({ status, hasMondayData, lastSync, onSync, syncing }: {
 }) {
   if (status === 'api') {
     return (
-      <div className="flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-green-500/15 text-green-400 border border-green-500/30">
-          <span className="h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />Monday: live<SyncLabel ts={lastSync} relative />
-        </span>
-        <button onClick={onSync} disabled={syncing} className="text-xs text-slate-400 hover:text-white transition-colors" title="Sync Monday">
-          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
+      <button onClick={onSync} disabled={syncing} title={`Monday: live${lastSync ? ` — sync ${lastSync}` : ''}`}
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-green-500/15 text-green-400 border border-green-500/30 hover:bg-green-500/25 transition-colors disabled:opacity-50">
+        <span className="h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />{syncing ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'Mon'}
+      </button>
     )
   }
   if (hasMondayData) {
     return (
-      <div className="flex items-center gap-1.5">
-        <Link href="/import/monday">
-          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 hover:bg-yellow-500/20 transition-colors cursor-pointer">
-            <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />Monday: CSV<SyncLabel ts={lastSync} />
-          </span>
-        </Link>
-        <button onClick={onSync} disabled={syncing} className="text-xs text-slate-400 hover:text-white transition-colors" title="Sync Monday">
-          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
+      <Link href="/import/monday" title={`Monday: CSV${lastSync ? ` — ${lastSync}` : ''}`}>
+        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 hover:bg-yellow-500/20 transition-colors cursor-pointer">
+          <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />Mon
+        </span>
+      </Link>
     )
   }
   return (
-    <Link href="/import/monday">
-      <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-slate-800 text-slate-500 border border-slate-700 hover:text-slate-300 transition-colors cursor-pointer">
-        Monday
+    <Link href="/import/monday" title="Monday: non configurato">
+      <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-slate-800 text-slate-500 border border-slate-700 hover:text-slate-300 transition-colors cursor-pointer">
+        Mon
       </span>
     </Link>
   )
@@ -648,31 +649,25 @@ function NotionBadge({ status, lastSync, onSync, syncing }: {
 }) {
   if (status === 'live') {
     return (
-      <div className="flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-green-500/15 text-green-400 border border-green-500/30">
-          <span className="h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />Notion: live<SyncLabel ts={lastSync} relative />
-        </span>
-        <button onClick={onSync} disabled={syncing} className="text-xs text-slate-400 hover:text-white transition-colors" title="Sync ora">
-          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
+      <button onClick={onSync} disabled={syncing} title={`Notion: live${lastSync ? ` — sync ${lastSync}` : ''}`}
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-green-500/15 text-green-400 border border-green-500/30 hover:bg-green-500/25 transition-colors disabled:opacity-50">
+        <span className="h-1.5 w-1.5 rounded-full bg-green-400 animate-pulse" />{syncing ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'Not'}
+      </button>
     )
   }
   if (status === 'csv') {
     return (
-      <div className="flex items-center gap-1.5">
-        <Link href="/import/bugs">
-          <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 hover:bg-yellow-500/20 transition-colors cursor-pointer">
-            <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />Notion: CSV<SyncLabel ts={lastSync} />
-          </span>
-        </Link>
-      </div>
+      <Link href="/import/bugs" title={`Notion: CSV${lastSync ? ` — ${lastSync}` : ''}`}>
+        <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 hover:bg-yellow-500/20 transition-colors cursor-pointer">
+          <span className="h-1.5 w-1.5 rounded-full bg-yellow-400" />Not
+        </span>
+      </Link>
     )
   }
   return (
-    <Link href="/import/bugs">
-      <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-red-500/15 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors cursor-pointer">
-        <span className="h-1.5 w-1.5 rounded-full bg-red-400" />Notion: off
+    <Link href="/import/bugs" title="Notion: non configurato">
+      <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-red-500/15 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors cursor-pointer">
+        <span className="h-1.5 w-1.5 rounded-full bg-red-400" />Not
       </span>
     </Link>
   )
@@ -683,37 +678,25 @@ function PostHogBadge({ status, lastSync, onSync, syncing }: {
 }) {
   if (status === 'live') {
     return (
-      <div className="flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-blue-500/15 text-blue-400 border border-blue-500/30">
-          <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />PostHog: live<SyncLabel ts={lastSync} relative />
-        </span>
-        <button onClick={onSync} disabled={syncing} className="text-xs text-slate-400 hover:text-white transition-colors" title="Sync PostHog">
-          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
+      <button onClick={onSync} disabled={syncing} title={`PostHog: live${lastSync ? ` — sync ${lastSync}` : ''}`}
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-blue-500/15 text-blue-400 border border-blue-500/30 hover:bg-blue-500/25 transition-colors disabled:opacity-50">
+        <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" />{syncing ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'PH'}
+      </button>
     )
   }
   if (status === 'synced') {
     return (
-      <div className="flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-slate-500/15 text-slate-400 border border-slate-500/30">
-          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />PostHog: cache<SyncLabel ts={lastSync} relative />
-        </span>
-        <button onClick={onSync} disabled={syncing} className="text-xs text-slate-400 hover:text-white transition-colors" title="Sync PostHog">
-          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
+      <button onClick={onSync} disabled={syncing} title={`PostHog: cache${lastSync ? ` — sync ${lastSync}` : ''}`}
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-slate-500/15 text-slate-400 border border-slate-500/30 hover:bg-slate-500/25 transition-colors disabled:opacity-50">
+        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />{syncing ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'PH'}
+      </button>
     )
   }
   if (status === 'ready') {
     return (
-      <button
-        onClick={onSync}
-        disabled={syncing}
-        className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors"
-      >
-        <Activity className="h-3 w-3" />
-        {syncing ? 'Syncing...' : 'Sync PostHog'}
+      <button onClick={onSync} disabled={syncing} title="PostHog: pronto per sync"
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20 transition-colors disabled:opacity-50">
+        <Activity className="h-3 w-3" />{syncing ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'PH'}
       </button>
     )
   }
@@ -725,34 +708,25 @@ function ClerkBadge({ status, lastSync, onSync, syncing }: {
 }) {
   if (status === 'live') {
     return (
-      <div className="flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-violet-500/15 text-violet-400 border border-violet-500/30">
-          <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-pulse" />Clerk: live<SyncLabel ts={lastSync} relative />
-        </span>
-        <button onClick={onSync} disabled={syncing} className="text-xs text-slate-400 hover:text-white transition-colors" title="Sync Clerk">
-          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
+      <button onClick={onSync} disabled={syncing} title={`Clerk: live${lastSync ? ` — sync ${lastSync}` : ''}`}
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-violet-500/15 text-violet-400 border border-violet-500/30 hover:bg-violet-500/25 transition-colors disabled:opacity-50">
+        <span className="h-1.5 w-1.5 rounded-full bg-violet-400 animate-pulse" />{syncing ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'Clk'}
+      </button>
     )
   }
   if (status === 'synced') {
     return (
-      <div className="flex items-center gap-1.5">
-        <span className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-slate-500/15 text-slate-400 border border-slate-500/30">
-          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />Clerk: cache<SyncLabel ts={lastSync} relative />
-        </span>
-        <button onClick={onSync} disabled={syncing} className="text-xs text-slate-400 hover:text-white transition-colors" title="Sync Clerk">
-          <RefreshCw className={`h-3.5 w-3.5 ${syncing ? 'animate-spin' : ''}`} />
-        </button>
-      </div>
+      <button onClick={onSync} disabled={syncing} title={`Clerk: cache${lastSync ? ` — sync ${lastSync}` : ''}`}
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-slate-500/15 text-slate-400 border border-slate-500/30 hover:bg-slate-500/25 transition-colors disabled:opacity-50">
+        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />{syncing ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'Clk'}
+      </button>
     )
   }
   if (status === 'ready') {
     return (
-      <button onClick={onSync} disabled={syncing}
-        className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium bg-violet-500/10 text-violet-400 border border-violet-500/20 hover:bg-violet-500/20 transition-colors">
-        <Users className="h-3 w-3" />
-        {syncing ? 'Syncing...' : 'Sync Clerk'}
+      <button onClick={onSync} disabled={syncing} title="Clerk: pronto per sync"
+        className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium bg-violet-500/10 text-violet-400 border border-violet-500/20 hover:bg-violet-500/20 transition-colors disabled:opacity-50">
+        <Users className="h-3 w-3" />{syncing ? <RefreshCw className="h-3 w-3 animate-spin" /> : 'Clk'}
       </button>
     )
   }
