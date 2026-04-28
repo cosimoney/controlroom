@@ -264,7 +264,7 @@ export default function DashboardPage() {
       <header className="border-b sticky top-0 z-40" style={{ borderColor: '#1e293b', background: 'rgba(2,6,23,0.9)', backdropFilter: 'blur(8px)' }}>
         <div className="max-w-[1600px] mx-auto px-4 py-2 flex items-center gap-3">
           {/* Title */}
-          <span className="text-sm font-bold text-white tracking-tight shrink-0">CSM</span>
+          <span className="text-sm font-bold text-white tracking-tight shrink-0">Control Room</span>
 
           {/* Sync badges — compact */}
           <div className="flex items-center gap-1.5 shrink-0">
@@ -304,7 +304,7 @@ export default function DashboardPage() {
 
       <main className="max-w-[1600px] mx-auto px-4 py-4 space-y-4">
         {/* Stats row — cliccabili come filtri rapidi */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-9 gap-2">
           <KpiCard icon={<Users className="h-4 w-4 text-indigo-400" />}         label="Clienti attivi"        value={stats.totalActive}           color="text-white"        filterId="active"        active={activeKpiFilter} onToggle={setActiveKpiFilter} />
           <KpiCard icon={<AlertTriangle className="h-4 w-4 text-yellow-400" />} label="Da contattare (>30gg)" value={stats.toContact}             color="text-yellow-400"   filterId="to_contact"    active={activeKpiFilter} onToggle={setActiveKpiFilter} />
           <KpiCard icon={<AlertCircle className="h-4 w-4 text-red-400" />}      label="Critici (>60gg)"       value={stats.critical}              color="text-red-400"      filterId="critical"      active={activeKpiFilter} onToggle={setActiveKpiFilter} />
