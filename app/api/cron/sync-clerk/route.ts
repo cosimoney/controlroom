@@ -1,10 +1,11 @@
 /**
  * Cron endpoint for Clerk sync — runs daily via Vercel Cron Jobs.
- * Separate from sync-all because Clerk alone takes ~48s (120 orgs).
+ * Syncs 30 orgs per run (rotating batch) to fit in 60s timeout.
+ * ~120 orgs = 4 batches = full sync every 4 days with daily cron.
  */
 
 import { NextResponse } from 'next/server'
-import { isClerkConfigured, syncAllClerk } from '@/lib/clerk'
+import { isClerkConfigured, syncClerkBatch } from '@/lib/clerk'
 
 export const maxDuration = 60
 
@@ -20,7 +21,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await syncAllClerk()
+    const result = await syncClerkBatch()
     return NextResponse.json({
       ok: true,
       timestamp: new Date().toISOString(),

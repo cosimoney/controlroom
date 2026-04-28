@@ -206,6 +206,86 @@ export async function syncAllClerk(): Promise<{ orgs: number; users: number; err
   return { orgs: orgs.length, users: userCount, errors }
 }
 
+// ─── Batched sync (for cron — fits in 60s) ────────────────────────────
+
+const CLERK_BATCH_SIZE = 30
+
+export async function syncClerkBatch(): Promise<{ batch: string; orgs: number; users: number; errors: string[] }> {
+  const sql = await db()
+  const errors: string[] = []
+  let userCount = 0
+
+  const allOrgs = await fetchAllOrganizations()
+  const totalBatches = Math.ceil(allOrgs.length / CLERK_BATCH_SIZE)
+
+  // Determine which batch to sync based on rotating counter
+  const [meta] = await sql<{ notes: string | null }[]>`
+    SELECT notes FROM sync_metadata WHERE source = 'clerk'
+  `
+  const lastBatch = parseInt(meta?.notes?.match(/batch:(\d+)/)?.[1] ?? '-1')
+  const currentBatch = (lastBatch + 1) % totalBatches
+
+  const start = currentBatch * CLERK_BATCH_SIZE
+  const batchOrgs = allOrgs.slice(start, start + CLERK_BATCH_SIZE)
+
+  const CONCURRENT = 5
+  for (let i = 0; i < batchOrgs.length; i += CONCURRENT) {
+    const chunk = batchOrgs.slice(i, i + CONCURRENT)
+    await Promise.all(chunk.map(async (org) => {
+      try {
+        const members = await fetchOrgMembers(org.id)
+        let internal = 0, external = 0
+
+        await sql.begin(async (tsql) => {
+          for (const m of members) {
+            const pud = m.public_user_data
+            const email = pud.identifier ?? null
+            const isInternal = email ? isInternalUser(email) : false
+            const lastSignIn = pud.last_sign_in_at ? new Date(pud.last_sign_in_at).toISOString() : null
+            const createdAt = pud.created_at
+              ? new Date(pud.created_at).toISOString()
+              : new Date(m.created_at).toISOString()
+
+            await tsql`
+              INSERT INTO clerk_users
+                (id, org_id, org_slug, email, first_name, last_name, role, is_internal, last_sign_in_at, created_at, last_synced_at)
+              VALUES (${pud.user_id}, ${org.id}, ${org.slug}, ${email}, ${pud.first_name ?? null},
+                      ${pud.last_name ?? null}, ${m.role}, ${isInternal ? 1 : 0}, ${lastSignIn}, ${createdAt}, NOW())
+              ON CONFLICT(id) DO UPDATE SET
+                org_id = EXCLUDED.org_id, org_slug = EXCLUDED.org_slug, email = EXCLUDED.email,
+                first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name, role = EXCLUDED.role,
+                is_internal = EXCLUDED.is_internal, last_sign_in_at = EXCLUDED.last_sign_in_at,
+                last_synced_at = EXCLUDED.last_synced_at
+            `
+            if (isInternalUser(email ?? '')) internal++; else external++
+          }
+
+          const modules = parseClerkModules(org.public_metadata)
+          const currencies = (org.public_metadata.currencies as unknown[] | undefined) ?? []
+          await tsql`
+            INSERT INTO clerk_organizations
+              (id, slug, name, modules_enabled, raw_metadata, currencies, total_members, internal_members, external_members, last_synced_at)
+            VALUES (${org.id}, ${org.slug ?? null}, ${org.name},
+                    ${JSON.stringify(modules)}, ${JSON.stringify(org.public_metadata)}, ${JSON.stringify(currencies)},
+                    ${members.length}, ${internal}, ${external}, NOW())
+            ON CONFLICT(id) DO UPDATE SET
+              slug = EXCLUDED.slug, name = EXCLUDED.name, modules_enabled = EXCLUDED.modules_enabled,
+              raw_metadata = EXCLUDED.raw_metadata, currencies = EXCLUDED.currencies,
+              total_members = EXCLUDED.total_members, internal_members = EXCLUDED.internal_members,
+              external_members = EXCLUDED.external_members, last_synced_at = EXCLUDED.last_synced_at
+          `
+        })
+        userCount += members.length
+      } catch (e) {
+        errors.push(`${org.slug ?? org.id}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }))
+  }
+
+  await recordSync('clerk', 'cron', batchOrgs.length, `batch:${currentBatch} of ${totalBatches}`)
+  return { batch: `${currentBatch + 1}/${totalBatches}`, orgs: batchOrgs.length, users: userCount, errors }
+}
+
 // ─── Read helpers ──────────────────────────────────────────────────────
 
 export async function getClerkOrgBySlug(slug: string): Promise<{ org: ClerkOrgRow | null; users: ClerkUserRow[] }> {
