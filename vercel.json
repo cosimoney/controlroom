@@ -4,5 +4,8 @@
       "path": "/api/cron/sync-all",
       "schedule": "0 */4 * * *"
     }
-  ]
+  ],
+  "git": {
+    "deploymentEnabled": false
+  }
 }
