@@ -1,0 +1,29 @@
+name: Vercel Deploy
+on:
+  push:
+    branches: [master, main, preview, dev]
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Deploy production
+        if: github.ref_name == 'master' || github.ref_name == 'main'
+        run: |
+          vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+          vercel deploy --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy preview / dev
+        if: github.ref_name != 'master' && github.ref_name != 'main'
+        run: |
+          vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
+          vercel deploy --token=${{ secrets.VERCEL_TOKEN }}
