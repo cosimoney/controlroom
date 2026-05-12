@@ -3,8 +3,9 @@
  *
  * Strategy (fits in 60s Hobby timeout):
  * 1. Always: Monday sync (~10s) + Notion bugs sync (~15s)
- * 2. Rotating: PostHog sync for a batch of ~10 clients per run
- *    (cycles through all 55 clients over ~6 runs = 24h if cron runs every 4h)
+ * 2. FIFO: PostHog sync for the 10 clients with the oldest cache (or never synced).
+ *    Self-balancing — no rotating counter needed; the oldest naturally rise to the
+ *    top each run. With ~55 clients and daily cron, full coverage in ~6 days.
  *
  * Auth: requires CRON_SECRET header to prevent unauthorized calls.
  */
@@ -58,25 +59,25 @@ export async function GET(request: Request) {
     }
   }
 
-  // ── 3. PostHog rotating batch ──────────────────────────────────────
+  // ── 3. PostHog FIFO batch (oldest cache first) ─────────────────────
   if (isPostHogConfigured()) {
     try {
-      const allClients = await sql<{ client_code: string }[]>`
-        SELECT client_code FROM clients
-        WHERE client_code IS NOT NULL AND status = 'active'
-        ORDER BY client_code
+      // Pick the 10 active clients whose 30-day summary cache is oldest
+      // (or null = never synced — those go to the top via NULLS FIRST).
+      const batchClients = await sql<{ client_code: string; last_synced_at: string | null }[]>`
+        SELECT
+          c.client_code,
+          pc.last_synced_at::text AS last_synced_at
+        FROM clients c
+        LEFT JOIN posthog_usage_cache pc
+          ON pc.client_code = c.client_code
+          AND pc.metric_type = 'summary'
+          AND pc.user_type = 'all'
+          AND pc.period_days = 30
+        WHERE c.client_code IS NOT NULL AND c.status = 'active'
+        ORDER BY pc.last_synced_at ASC NULLS FIRST
+        LIMIT ${POSTHOG_BATCH_SIZE}
       `
-
-      // Determine which batch to sync based on a rotating counter
-      const [meta] = await sql<{ notes: string | null }[]>`
-        SELECT notes FROM sync_metadata WHERE source = 'posthog'
-      `
-      const lastBatch = parseInt(meta?.notes?.match(/batch:(\d+)/)?.[1] ?? '-1')
-      const totalBatches = Math.ceil(allClients.length / POSTHOG_BATCH_SIZE)
-      const currentBatch = (lastBatch + 1) % totalBatches
-
-      const start = currentBatch * POSTHOG_BATCH_SIZE
-      const batchClients = allClients.slice(start, start + POSTHOG_BATCH_SIZE)
 
       let phSynced = 0
       const phErrors: string[] = []
@@ -89,10 +90,15 @@ export async function GET(request: Request) {
         }
       }
 
-      await recordSync('posthog', 'cron', phSynced, `batch:${currentBatch} of ${totalBatches}`)
+      await recordSync('posthog', 'cron', phSynced, 'fifo')
       results.posthog = {
-        batch: `${currentBatch + 1}/${totalBatches}`,
-        clients: batchClients.map((c) => c.client_code),
+        strategy: 'fifo',
+        clients: batchClients.map((c) => ({
+          code: c.client_code,
+          cache_age_h: c.last_synced_at
+            ? Math.round((Date.now() - new Date(c.last_synced_at).getTime()) / 3600000)
+            : null,
+        })),
         synced: phSynced,
         errors: phErrors,
       }
