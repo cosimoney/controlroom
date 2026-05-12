@@ -7,12 +7,10 @@ const POSTHOG_API_KEY    = process.env.POSTHOG_API_KEY
 const POSTHOG_PROJECT_ID = process.env.POSTHOG_PROJECT_ID
 
 async function hogql(query: string): Promise<unknown[][]> {
-  // PostHog HogQL default LIMIT is 100. Trends groups by (org, email) across all
-  // clients, easily exceeding that and silently truncating. Bump to 100k.
   const res = await fetch(`${POSTHOG_HOST}/api/projects/${POSTHOG_PROJECT_ID}/query/`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${POSTHOG_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: { kind: 'HogQLQuery', query, limit: 100000 } }),
+    body: JSON.stringify({ query: { kind: 'HogQLQuery', query } }),
   })
   if (!res.ok) {
     const text = await res.text()
@@ -38,6 +36,8 @@ export async function GET(request: Request) {
   // 1. Current period sessions per org+email (last N days)
   // 2. Previous period sessions per org+email (N-2N days ago)
   // 3. Weekly breakdown for sparkline (last 90 days, bucketed by week number)
+  // NOTE: explicit LIMIT in SQL — HogQL defaults to 100 rows otherwise, which
+  // silently truncates the GROUP BY result and drops clients alphabetically.
   const [currentRows, prevRows, weeklyRows] = await Promise.all([
     hogql(`
       SELECT
@@ -49,6 +49,7 @@ export async function GET(request: Request) {
         AND timestamp >= now() - interval ${days} day
         ${EMAIL_FILTER} ${ORG_EXCLUDE}
       GROUP BY org, email
+      LIMIT 10000
     `),
     hogql(`
       SELECT
@@ -61,6 +62,7 @@ export async function GET(request: Request) {
         AND timestamp < now() - interval ${days} day
         ${EMAIL_FILTER} ${ORG_EXCLUDE}
       GROUP BY org, email
+      LIMIT 10000
     `),
     hogql(`
       SELECT
@@ -74,6 +76,7 @@ export async function GET(request: Request) {
         ${EMAIL_FILTER} ${ORG_EXCLUDE}
       GROUP BY org, email, weeks_ago
       ORDER BY org, weeks_ago
+      LIMIT 10000
     `),
   ])
 
