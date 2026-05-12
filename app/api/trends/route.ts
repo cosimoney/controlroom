@@ -7,10 +7,12 @@ const POSTHOG_API_KEY    = process.env.POSTHOG_API_KEY
 const POSTHOG_PROJECT_ID = process.env.POSTHOG_PROJECT_ID
 
 async function hogql(query: string): Promise<unknown[][]> {
+  // PostHog HogQL default LIMIT is 100. Trends groups by (org, email) across all
+  // clients, easily exceeding that and silently truncating. Bump to 100k.
   const res = await fetch(`${POSTHOG_HOST}/api/projects/${POSTHOG_PROJECT_ID}/query/`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${POSTHOG_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: { kind: 'HogQLQuery', query } }),
+    body: JSON.stringify({ query: { kind: 'HogQLQuery', query, limit: 100000 } }),
   })
   if (!res.ok) {
     const text = await res.text()
