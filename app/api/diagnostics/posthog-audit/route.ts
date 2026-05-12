@@ -99,11 +99,17 @@ export async function GET(request: Request) {
     const modules  = cache?.summary?.modules ?? null
     const modulesCount = modules ? Object.keys(modules).length : 0
 
+    // Mismatch threshold: max(10 sessions, 20% of live ext). Small drift between
+    // cache and live is normal between cron cycles; only flag meaningful divergence.
+    const mismatchThreshold = Math.max(10, Math.round(live.ext * 0.2))
+
     const flags: string[] = []
     if (!cache)                                                                              flags.push('cache_missing')
-    else if (cacheAgeMin !== null && cacheAgeMin > 30)                                       flags.push('cache_stale')
+    // Cron syncs run daily ~06:00 UTC, so caches up to ~25h old are expected.
+    // Flag only caches older than 36h (a full missed cron cycle).
+    else if (cacheAgeMin !== null && cacheAgeMin > 60 * 36)                                  flags.push('cache_stale')
     if (live.ext === 0 && live.int === 0)                                                    flags.push('no_posthog_activity')
-    if (live.ext > 0 && cacheExt !== null && Math.abs(live.ext - cacheExt) > 2)              flags.push('ext_sessions_mismatch')
+    if (live.ext > 0 && cacheExt !== null && Math.abs(live.ext - cacheExt) >= mismatchThreshold) flags.push('ext_sessions_mismatch')
     if ((live.ext > 0 || live.int > 0) && cache && modulesCount === 0)                       flags.push('modules_untracked')
     if (live.ext === 0 && live.int > 0)                                                      flags.push('internal_only')
 
@@ -129,7 +135,7 @@ export async function GET(request: Request) {
   const totals = {
     active_clients:        clients.length,
     in_cache:              audit.filter((a) => a.cache !== null).length,
-    cache_fresh:           audit.filter((a) => a.cache && (a.cache.age_min ?? 99999) <= 30).length,
+    cache_synced_today:    audit.filter((a) => a.cache && (a.cache.age_min ?? 99999) <= 60 * 24).length,
     cache_stale:           audit.filter((a) => a.flags.includes('cache_stale')).length,
     cache_missing:         audit.filter((a) => a.flags.includes('cache_missing')).length,
     no_posthog_activity:   audit.filter((a) => a.flags.includes('no_posthog_activity')).length,
@@ -147,12 +153,12 @@ export async function GET(request: Request) {
     days,
     totals,
     flag_legend: {
-      cache_missing:         'Nessuna cache PostHog per questo cliente (mai sincronizzato)',
-      cache_stale:           'Cache > 30 min — la pagina mostra dati vecchi finché non si rifa il sync',
-      no_posthog_activity:   '0 sessioni ext + int negli ultimi N giorni (cliente inattivo o tracking mancante)',
-      ext_sessions_mismatch: 'Cache e PostHog live divergono di >2 sessioni — sync probabilmente da rieseguire',
-      modules_untracked:     'Sessioni presenti ma `properties.module` mancante negli eventi (script tracking incompleto)',
-      internal_only:         'Solo utenti interni Witailer/Retex/Alkemy — il cliente vero non ha mai usato il prodotto',
+      cache_missing:         'Mai sincronizzato — il prossimo cron lo prenderà o forza /api/posthog/sync',
+      cache_stale:           'Cache > 36h — un ciclo di cron è stato saltato per questo cliente',
+      no_posthog_activity:   '0 sessioni ext + int nel periodo — cliente inattivo o tracking non installato',
+      ext_sessions_mismatch: 'Divergenza significativa cache vs live (>10 sess o >20%) — re-sync utile',
+      modules_untracked:     'Sessioni presenti ma `properties.module` mancante negli eventi — script tracking incompleto lato cliente',
+      internal_only:         'Solo utenti interni Witailer/Retex/Alkemy — il cliente vero non ha mai usato il prodotto nel periodo',
     },
     clients: clientsOut,
   })
