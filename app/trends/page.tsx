@@ -1,7 +1,7 @@
 'use client'
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, RefreshCw, TrendingDown, TrendingUp, Minus } from 'lucide-react'
+import { ArrowLeft, RefreshCw, TrendingDown, TrendingUp, Minus, ChevronUp, ChevronDown } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Sparkline } from '@/components/ui/sparkline'
 import { TIER_STYLES } from '@/lib/health'
@@ -54,12 +54,17 @@ function DeltaIcon({ pct }: { pct: number | null }) {
 
 const PAGE_SIZE = 15
 
+type KpiFilter = 'declining' | 'stable' | 'growing' | null
+type SortDir = 'asc' | 'desc'
+
 export default function TrendsPage() {
   const [data, setData]           = useState<TrendRow[]>([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState<string | null>(null)
   const [days, setDays]           = useState(30)
   const [filterTier, setFilterTier] = useState<string>('all')
+  const [kpiFilter, setKpiFilter] = useState<KpiFilter>(null)
+  const [sortDelta, setSortDelta] = useState<SortDir | null>(null)
   const [page, setPage]           = useState(0)
 
   const fetchTrends = useCallback(async () => {
@@ -84,12 +89,41 @@ export default function TrendsPage() {
 
   useEffect(() => { fetchTrends() }, [fetchTrends])
 
-  const filtered = data
+  // Tier-filtered (drives KPI counts — independent from KPI box selection)
+  const tierFiltered = data
     .filter((c) => filterTier === 'all' || String(c.tier) === filterTier)
 
-  const declining  = filtered.filter((c) => c.delta_pct !== null && c.delta_pct <= -10).length
-  const stable     = filtered.filter((c) => c.delta_pct !== null && c.delta_pct > -10 && c.delta_pct < 10).length
-  const growing    = filtered.filter((c) => c.delta_pct !== null && c.delta_pct >= 10).length
+  const declining  = tierFiltered.filter((c) => c.delta_pct !== null && c.delta_pct <= -10).length
+  const stable     = tierFiltered.filter((c) => c.delta_pct !== null && c.delta_pct > -10 && c.delta_pct < 10).length
+  const growing    = tierFiltered.filter((c) => c.delta_pct !== null && c.delta_pct >= 10).length
+
+  // Table data: tier filter + KPI filter + sort
+  const filtered = tierFiltered
+    .filter((c) => {
+      if (!kpiFilter) return true
+      if (c.delta_pct === null) return false
+      if (kpiFilter === 'declining') return c.delta_pct <= -10
+      if (kpiFilter === 'stable')    return c.delta_pct > -10 && c.delta_pct < 10
+      return c.delta_pct >= 10
+    })
+    .sort((a, b) => {
+      if (!sortDelta) return 0
+      // Nulls always at end regardless of direction
+      if (a.delta_pct === null && b.delta_pct === null) return 0
+      if (a.delta_pct === null) return 1
+      if (b.delta_pct === null) return -1
+      return sortDelta === 'desc' ? b.delta_pct - a.delta_pct : a.delta_pct - b.delta_pct
+    })
+
+  function toggleKpiFilter(id: Exclude<KpiFilter, null>) {
+    setKpiFilter((cur) => (cur === id ? null : id))
+    setPage(0)
+  }
+
+  function toggleSortDelta() {
+    setSortDelta((cur) => (cur === 'desc' ? 'asc' : cur === 'asc' ? null : 'desc'))
+    setPage(0)
+  }
 
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE)
   const shown = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE)
@@ -133,21 +167,39 @@ export default function TrendsPage() {
         <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</div>
       )}
 
-      {/* Summary KPIs */}
+      {/* Summary KPIs — clickable filters */}
       {!loading && !error && (
         <div className="grid grid-cols-3 gap-3">
-          <div className="rounded-lg border p-4 bg-red-500/10 text-red-400" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+          <button
+            onClick={() => toggleKpiFilter('declining')}
+            className="rounded-lg border p-4 bg-red-500/10 text-red-400 text-left transition-all hover:bg-red-500/15"
+            style={{
+              borderColor: kpiFilter === 'declining' ? 'rgba(248,113,113,0.6)' : 'rgba(255,255,255,0.1)',
+              boxShadow:   kpiFilter === 'declining' ? '0 0 0 1px rgba(248,113,113,0.4)' : 'none',
+            }}>
             <p className="text-2xl font-bold tabular-nums">{declining}</p>
             <p className="text-xs mt-1 opacity-80"><TrendingDown className="h-3 w-3 inline mr-1" />In calo (&gt;10%)</p>
-          </div>
-          <div className="rounded-lg border p-4 bg-slate-800/40 text-slate-400" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+          </button>
+          <button
+            onClick={() => toggleKpiFilter('stable')}
+            className="rounded-lg border p-4 bg-slate-800/40 text-slate-400 text-left transition-all hover:bg-slate-800/60"
+            style={{
+              borderColor: kpiFilter === 'stable' ? 'rgba(148,163,184,0.6)' : 'rgba(255,255,255,0.1)',
+              boxShadow:   kpiFilter === 'stable' ? '0 0 0 1px rgba(148,163,184,0.4)' : 'none',
+            }}>
             <p className="text-2xl font-bold tabular-nums">{stable}</p>
             <p className="text-xs mt-1 opacity-80"><Minus className="h-3 w-3 inline mr-1" />Stabili (±10%)</p>
-          </div>
-          <div className="rounded-lg border p-4 bg-green-500/10 text-green-400" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
+          </button>
+          <button
+            onClick={() => toggleKpiFilter('growing')}
+            className="rounded-lg border p-4 bg-green-500/10 text-green-400 text-left transition-all hover:bg-green-500/15"
+            style={{
+              borderColor: kpiFilter === 'growing' ? 'rgba(74,222,128,0.6)' : 'rgba(255,255,255,0.1)',
+              boxShadow:   kpiFilter === 'growing' ? '0 0 0 1px rgba(74,222,128,0.4)' : 'none',
+            }}>
             <p className="text-2xl font-bold tabular-nums">{growing}</p>
             <p className="text-xs mt-1 opacity-80"><TrendingUp className="h-3 w-3 inline mr-1" />In crescita (&gt;10%)</p>
-          </div>
+          </button>
         </div>
       )}
 
@@ -172,7 +224,14 @@ export default function TrendsPage() {
                     <th className="px-3 py-2 text-slate-500 font-medium text-right">ARR</th>
                     <th className="px-3 py-2 text-slate-500 font-medium text-right">Sessioni</th>
                     <th className="px-3 py-2 text-slate-500 font-medium text-right">Prec.</th>
-                    <th className="px-3 py-2 text-slate-500 font-medium text-center">Delta</th>
+                    <th className="px-3 py-2 font-medium text-center">
+                      <button onClick={toggleSortDelta} className="inline-flex items-center gap-1 text-slate-500 hover:text-white transition-colors mx-auto">
+                        Delta
+                        {sortDelta === 'desc' && <ChevronDown className="h-3 w-3 text-indigo-400" />}
+                        {sortDelta === 'asc'  && <ChevronUp className="h-3 w-3 text-indigo-400" />}
+                        {sortDelta === null   && <ChevronUp className="h-3 w-3 text-slate-700" />}
+                      </button>
+                    </th>
                     <th className="px-4 py-2 text-slate-500 font-medium text-center">Trend</th>
                   </tr>
                 </thead>
