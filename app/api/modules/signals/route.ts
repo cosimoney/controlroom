@@ -45,6 +45,10 @@ export async function GET() {
     const phModules    = phMap.get(code) ?? {}
 
     for (const [key, entry] of Object.entries(MODULE_CROSS_MAP)) {
+      // 'home' is implicit on every plan and rarely tracked in PostHog → skip
+      // to avoid noisy "paid but not used" alerts on this view. Other sections
+      // (e.g. client detail's Moduli comparison) still include it.
+      if (key === 'home') continue
       const subscribed     = hasProductTag(client.products, entry.products_tags)
       const monday_value   = subscribed ? 1 : 0
       const clerk_enabled  = entry.clerk_key === '__ALWAYS__'
