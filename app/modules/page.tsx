@@ -35,6 +35,7 @@ export default function ModulesPage() {
   const [loading, setLoading]     = useState(true)
   const [filterSignal, setFilterSignal] = useState<ModuleSignalType | 'all'>('all')
   const [filterTier, setFilterTier]     = useState<string>('all')
+  const [filterModules, setFilterModules] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     fetch('/api/modules/signals')
@@ -43,10 +44,33 @@ export default function ModulesPage() {
       .catch(() => setLoading(false))
   }, [])
 
-  const filtered = alerts
+  // Apply signal + tier + actionable filters BEFORE computing chip counts,
+  // so the counts reflect what the user sees in context.
+  const preModuleFiltered = alerts
     .filter((a) => filterSignal === 'all' || a.signal === filterSignal)
     .filter((a) => filterTier === 'all' || String(a.tier) === filterTier)
-    .filter((a) => a.signal !== 'grey' && a.signal !== 'green')  // show only actionable signals
+    .filter((a) => a.signal !== 'grey' && a.signal !== 'green')
+
+  // Per-module chip data (sorted by count desc, then label asc for stability)
+  const moduleCounts: { key: string; label: string; count: number }[] = Object.values(
+    preModuleFiltered.reduce<Record<string, { key: string; label: string; count: number }>>((acc, a) => {
+      if (!acc[a.module_key]) acc[a.module_key] = { key: a.module_key, label: a.module_label, count: 0 }
+      acc[a.module_key].count++
+      return acc
+    }, {})
+  ).sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+
+  const filtered = preModuleFiltered
+    .filter((a) => filterModules.size === 0 || filterModules.has(a.module_key))
+
+  function toggleModule(key: string) {
+    setFilterModules((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   const counts = {
     yellow: alerts.filter((a) => a.signal === 'yellow').length,
@@ -99,14 +123,51 @@ export default function ModulesPage() {
           <option value="2">Tier 2</option>
           <option value="3">Tier 3</option>
         </select>
-        {(filterSignal !== 'all' || filterTier !== 'all') && (
-          <button onClick={() => { setFilterSignal('all'); setFilterTier('all') }}
+        {(filterSignal !== 'all' || filterTier !== 'all' || filterModules.size > 0) && (
+          <button onClick={() => { setFilterSignal('all'); setFilterTier('all'); setFilterModules(new Set()) }}
             className="text-xs text-slate-400 hover:text-white transition-colors">
             × Reset filtri
           </button>
         )}
         <span className="text-xs text-slate-500 ml-auto">{filtered.length} alert</span>
       </div>
+
+      {/* Module filter chips — multi-select, counts respect signal+tier filters */}
+      {moduleCounts.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs text-slate-500 uppercase tracking-wider">Filtra per modulo</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => setFilterModules(new Set())}
+              className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors ${
+                filterModules.size === 0
+                  ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                  : 'bg-slate-800/40 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+              }`}
+            >
+              {filterModules.size === 0 ? '× ' : ''}Tutti
+              <span className="opacity-60 tabular-nums">{preModuleFiltered.length}</span>
+            </button>
+            {moduleCounts.map((m) => {
+              const isActive = filterModules.has(m.key)
+              return (
+                <button
+                  key={m.key}
+                  onClick={() => toggleModule(m.key)}
+                  className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium border transition-colors ${
+                    isActive
+                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                      : 'bg-slate-800/40 border-slate-700 text-slate-400 hover:text-white hover:border-slate-600'
+                  }`}
+                >
+                  {m.label}
+                  <span className="opacity-60 tabular-nums">{m.count}</span>
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Alerts table */}
       <div className="rounded-lg border overflow-hidden" style={{ borderColor: '#1e293b' }}>
