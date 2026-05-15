@@ -30,9 +30,12 @@ const SIGNAL_CONFIG: Record<ModuleSignalType, { icon: string; label: string; bg:
 // Suppress unused import warning — getModuleSignal is imported for potential client-side use
 void getModuleSignal
 
+type ViewMode = 'alerts' | 'adoption'
+
 export default function ModulesPage() {
   const [alerts, setAlerts]       = useState<ModuleAlert[]>([])
   const [loading, setLoading]     = useState(true)
+  const [mode, setMode]                 = useState<ViewMode>('alerts')
   const [filterSignal, setFilterSignal] = useState<ModuleSignalType | 'all'>('all')
   const [filterTier, setFilterTier]     = useState<string>('all')
   const [filterModules, setFilterModules] = useState<Set<string>>(new Set())
@@ -44,12 +47,14 @@ export default function ModulesPage() {
       .catch(() => setLoading(false))
   }, [])
 
-  // Apply signal + tier + actionable filters BEFORE computing chip counts,
+  // Apply signal + tier + scope filters BEFORE computing chip counts,
   // so the counts reflect what the user sees in context.
+  // - alerts mode: only actionable signals (yellow/red/upsell) — exclude green/grey
+  // - adoption mode: everything actionable + green — exclude only grey
   const preModuleFiltered = alerts
     .filter((a) => filterSignal === 'all' || a.signal === filterSignal)
     .filter((a) => filterTier === 'all' || String(a.tier) === filterTier)
-    .filter((a) => a.signal !== 'grey' && a.signal !== 'green')
+    .filter((a) => mode === 'adoption' ? a.signal !== 'grey' : (a.signal !== 'grey' && a.signal !== 'green'))
 
   // Per-module chip data (sorted by count desc, then label asc for stability)
   const moduleCounts: { key: string; label: string; count: number }[] = Object.values(
@@ -78,40 +83,105 @@ export default function ModulesPage() {
     upsell: alerts.filter((a) => a.signal === 'upsell').length,
   }
 
+  // Adoption counts computed on the in-scope set (tier + module filters applied).
+  // Independent of signal filter so the 3 pillar metrics stay meaningful.
+  const adoptionScope = alerts
+    .filter((a) => filterTier === 'all' || String(a.tier) === filterTier)
+    .filter((a) => a.signal !== 'grey')
+    .filter((a) => filterModules.size === 0 || filterModules.has(a.module_key))
+
+  const adoptionCounts = {
+    subscribed: adoptionScope.filter((a) => (a.monday_value ?? 0) > 0).length,
+    enabled:    adoptionScope.filter((a) => a.clerk_enabled === true).length,
+    used:       adoptionScope.filter((a) => a.posthog_views > 0).length,
+  }
+
+  function switchMode(next: ViewMode) {
+    if (next === mode) return
+    // Switching modes: clear signal filter (semantics differ across modes).
+    // Keep tier and module chip filters since they apply in both.
+    setMode(next)
+    setFilterSignal('all')
+  }
+
   return (
     <div className="min-h-screen p-4 md:p-6 space-y-6" style={{ background: '#020817', color: '#f1f5f9' }}>
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <Link href="/" className="text-slate-400 hover:text-white transition-colors">
-          <ArrowLeft className="h-4 w-4" />
-        </Link>
-        <div>
-          <h1 className="text-xl font-bold text-white">Module Health</h1>
-          <p className="text-xs text-slate-500 mt-0.5">Confronto contratto × Clerk × PostHog per tutti i clienti</p>
+      {/* Header — title + mode toggle */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <Link href="/" className="text-slate-400 hover:text-white transition-colors">
+            <ArrowLeft className="h-4 w-4" />
+          </Link>
+          <div>
+            <h1 className="text-xl font-bold text-white">Module Health</h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {mode === 'alerts'
+                ? 'Confronto contratto × Clerk × PostHog — segnali azionabili per cliente'
+                : 'Esplora quali clienti hanno e usano ogni modulo'}
+            </p>
+          </div>
+        </div>
+        {/* Mode toggle (segmented control) */}
+        <div className="inline-flex rounded-md border overflow-hidden" style={{ borderColor: '#334155', background: '#1e293b' }}>
+          <button
+            onClick={() => switchMode('alerts')}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+              mode === 'alerts' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            ⚠ Alert
+          </button>
+          <button
+            onClick={() => switchMode('adoption')}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+              mode === 'adoption' ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            🔍 Adozione
+          </button>
         </div>
       </div>
 
-      {/* Summary KPIs */}
-      <div className="grid grid-cols-3 gap-3">
-        {([
-          { signal: 'yellow' as ModuleSignalType, displayLabel: 'Sottoutilizzati', count: counts.yellow },
-          { signal: 'red'    as ModuleSignalType, displayLabel: 'Non abilitati',   count: counts.red },
-          { signal: 'upsell' as ModuleSignalType, displayLabel: 'Opportunità',     count: counts.upsell },
-        ]).map((item) => {
-          const cfg = SIGNAL_CONFIG[item.signal]
-          return (
-            <button
-              key={item.signal}
-              onClick={() => setFilterSignal(filterSignal === item.signal ? 'all' : item.signal)}
-              className={`rounded-lg border p-4 text-left transition-colors ${filterSignal === item.signal ? 'ring-1 ring-current' : ''} ${cfg.bg} ${cfg.text}`}
+      {/* Summary KPIs — switch shape per mode */}
+      {mode === 'alerts' ? (
+        <div className="grid grid-cols-3 gap-3">
+          {([
+            { signal: 'yellow' as ModuleSignalType, displayLabel: 'Sottoutilizzati', count: counts.yellow },
+            { signal: 'red'    as ModuleSignalType, displayLabel: 'Non abilitati',   count: counts.red },
+            { signal: 'upsell' as ModuleSignalType, displayLabel: 'Opportunità',     count: counts.upsell },
+          ]).map((item) => {
+            const cfg = SIGNAL_CONFIG[item.signal]
+            return (
+              <button
+                key={item.signal}
+                onClick={() => setFilterSignal(filterSignal === item.signal ? 'all' : item.signal)}
+                className={`rounded-lg border p-4 text-left transition-colors ${filterSignal === item.signal ? 'ring-1 ring-current' : ''} ${cfg.bg} ${cfg.text}`}
+                style={{ borderColor: 'rgba(255,255,255,0.1)' }}
+              >
+                <p className="text-2xl font-bold tabular-nums">{item.count}</p>
+                <p className="text-xs mt-1 opacity-80">{cfg.icon} {item.displayLabel}</p>
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-3">
+          {([
+            { icon: '💰', label: 'Sottoscritti', count: adoptionCounts.subscribed, bg: 'bg-indigo-500/10',  text: 'text-indigo-300' },
+            { icon: '🔑', label: 'Abilitati',    count: adoptionCounts.enabled,    bg: 'bg-violet-500/10',  text: 'text-violet-300' },
+            { icon: '📊', label: 'In uso',       count: adoptionCounts.used,       bg: 'bg-green-500/10',   text: 'text-green-400' },
+          ]).map((item) => (
+            <div
+              key={item.label}
+              className={`rounded-lg border p-4 ${item.bg} ${item.text}`}
               style={{ borderColor: 'rgba(255,255,255,0.1)' }}
             >
               <p className="text-2xl font-bold tabular-nums">{item.count}</p>
-              <p className="text-xs mt-1 opacity-80">{cfg.icon} {item.displayLabel}</p>
-            </button>
-          )
-        })}
-      </div>
+              <p className="text-xs mt-1 opacity-80">{item.icon} {item.label}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex gap-2 flex-wrap items-center">
@@ -129,7 +199,7 @@ export default function ModulesPage() {
             × Reset filtri
           </button>
         )}
-        <span className="text-xs text-slate-500 ml-auto">{filtered.length} alert</span>
+        <span className="text-xs text-slate-500 ml-auto">{filtered.length} {mode === 'alerts' ? 'alert' : 'righe'}</span>
       </div>
 
       {/* Module filter chips — multi-select, counts respect signal+tier filters */}
@@ -169,16 +239,22 @@ export default function ModulesPage() {
         </div>
       )}
 
-      {/* Alerts table */}
+      {/* Table — header and empty state depend on mode */}
       <div className="rounded-lg border overflow-hidden" style={{ borderColor: '#1e293b' }}>
         <div className="px-4 py-3 border-b" style={{ borderColor: '#1e293b', background: '#0f172a' }}>
-          <h2 className="text-sm font-semibold text-slate-200">Alert moduli — solo segnali azionabili</h2>
+          <h2 className="text-sm font-semibold text-slate-200">
+            {mode === 'alerts'
+              ? 'Alert moduli — solo segnali azionabili'
+              : 'Adozione moduli — copertura contratto, abilitazione e uso'}
+          </h2>
         </div>
         <div style={{ background: '#0a0f1e' }}>
           {loading ? (
             <p className="text-slate-500 text-sm px-4 py-8 text-center">Caricamento...</p>
           ) : filtered.length === 0 ? (
-            <p className="text-slate-500 text-sm px-4 py-8 text-center">Nessun alert trovato</p>
+            <p className="text-slate-500 text-sm px-4 py-8 text-center">
+              {mode === 'alerts' ? 'Nessun alert trovato' : 'Nessun cliente con copertura per il filtro selezionato'}
+            </p>
           ) : (
             <table className="w-full text-sm">
               <thead>
