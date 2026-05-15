@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server'
 import { db, recordSync } from '@/lib/db'
 import { syncFromMondayApi, isMondayConfigured } from '@/lib/services/monday.service'
 import { syncClientUsage, isPostHogConfigured } from '@/lib/posthog'
+import { syncNotionBugs, isNotionBugsConfigured } from '@/lib/services/notion.service'
 
 export const maxDuration = 300
 
@@ -40,20 +41,10 @@ export async function GET(request: Request) {
     }
   }
 
-  // ── 2. Notion bugs sync ────────────────────────────────────────────
-  const notionToken = process.env.NOTION_TOKEN
-  const notionDbId = process.env.NOTION_BUGS_DATABASE_ID
-  if (notionToken && notionDbId) {
+  // ── 2. Notion bugs sync (direct call — no HTTP, bypasses auth middleware) ─
+  if (isNotionBugsConfigured()) {
     try {
-      const notionRes = await fetch(`${getBaseUrl(request)}/api/bugs/sync-notion`, {
-        method: 'POST',
-        headers: { cookie: request.headers.get('cookie') ?? '' },
-      })
-      if (notionRes.ok) {
-        results.notion = await notionRes.json()
-      } else {
-        results.notion = { error: `${notionRes.status}` }
-      }
+      results.notion = await syncNotionBugs()
     } catch (e) {
       results.notion = { error: String(e) }
     }
@@ -112,9 +103,4 @@ export async function GET(request: Request) {
     timestamp: new Date().toISOString(),
     results,
   })
-}
-
-function getBaseUrl(request: Request): string {
-  const url = new URL(request.url)
-  return `${url.protocol}//${url.host}`
 }
