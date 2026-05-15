@@ -15,7 +15,7 @@ import { db, recordSync } from '@/lib/db'
 import { syncFromMondayApi, isMondayConfigured } from '@/lib/services/monday.service'
 import { syncClientUsage, isPostHogConfigured } from '@/lib/posthog'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 const POSTHOG_BATCH_SIZE = 10
 

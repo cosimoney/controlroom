@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db, recordSync } from '@/lib/db'
 
-export const maxDuration = 60
+export const maxDuration = 300
 
 const NOTION_VERSION = '2022-06-28'
 

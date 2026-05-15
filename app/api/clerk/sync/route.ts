@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { isClerkConfigured, syncAllClerk } from '@/lib/clerk'
 
-// ~120 orgs × 5 batched = 24 batches × ~2s = ~48s
-export const maxDuration = 60
+// ~120 orgs × 5 batched = 24 batches × ~2s = ~48s. Bumped to 300s (Pro plan)
+// because concurrent Clerk API calls + DB writes can exceed 60s for large org counts.
+export const maxDuration = 300
 
 export async function POST() {
   if (!isClerkConfigured()) {
