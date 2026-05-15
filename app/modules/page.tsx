@@ -16,6 +16,7 @@ interface ModuleAlert {
   monday_value: number | null
   clerk_enabled: boolean | null
   posthog_views: number
+  posthog_sessions: number
   signal: ModuleSignalType
 }
 
@@ -36,16 +37,18 @@ export default function ModulesPage() {
   const [alerts, setAlerts]       = useState<ModuleAlert[]>([])
   const [loading, setLoading]     = useState(true)
   const [mode, setMode]                 = useState<ViewMode>('alerts')
+  const [days, setDays]                 = useState<30 | 60 | 90>(30)
   const [filterSignal, setFilterSignal] = useState<ModuleSignalType | 'all'>('all')
   const [filterTier, setFilterTier]     = useState<string>('all')
   const [filterModules, setFilterModules] = useState<Set<string>>(new Set())
 
   useEffect(() => {
-    fetch('/api/modules/signals')
+    setLoading(true)
+    fetch(`/api/modules/signals?days=${days}`)
       .then((r) => r.json())
       .then((d) => { setAlerts(d.alerts ?? []); setLoading(false) })
       .catch(() => setLoading(false))
-  }, [])
+  }, [days])
 
   // Apply signal + tier + scope filters BEFORE computing chip counts,
   // so the counts reflect what the user sees in context.
@@ -185,6 +188,13 @@ export default function ModulesPage() {
 
       {/* Filters */}
       <div className="flex gap-2 flex-wrap items-center">
+        <select value={days} onChange={(e) => setDays(Number(e.target.value) as 30 | 60 | 90)}
+          className="h-9 rounded-md border px-3 text-sm outline-none"
+          style={{ borderColor: '#334155', background: '#1e293b', color: '#f1f5f9' }}>
+          <option value={30}>Ultimi 30 giorni</option>
+          <option value={60}>Ultimi 60 giorni</option>
+          <option value={90}>Ultimi 90 giorni</option>
+        </select>
         <select value={filterTier} onChange={(e) => setFilterTier(e.target.value)}
           className="h-9 rounded-md border px-3 text-sm outline-none"
           style={{ borderColor: '#334155', background: '#1e293b', color: '#f1f5f9' }}>
@@ -265,6 +275,9 @@ export default function ModulesPage() {
                   <th className="px-3 py-2 text-slate-500 font-medium text-center">💰</th>
                   <th className="px-3 py-2 text-slate-500 font-medium text-center">🔑</th>
                   <th className="px-3 py-2 text-slate-500 font-medium text-right">📊 PV</th>
+                  {mode === 'adoption' && (
+                    <th className="px-3 py-2 text-slate-500 font-medium text-right" title="Unique sessions in the selected period">🔄 Sess</th>
+                  )}
                   <th className="px-4 py-2 text-slate-500 font-medium text-right">Segnale</th>
                 </tr>
               </thead>
@@ -294,6 +307,9 @@ export default function ModulesPage() {
                             : <span className="text-red-400">✗</span>}
                       </td>
                       <td className="px-3 py-2 text-right text-slate-400 tabular-nums">{a.posthog_views || '—'}</td>
+                      {mode === 'adoption' && (
+                        <td className="px-3 py-2 text-right text-slate-400 tabular-nums">{a.posthog_sessions || '—'}</td>
+                      )}
                       <td className={`px-4 py-2 text-right ${sig.text}`}>{sig.icon} {sig.label}</td>
                     </tr>
                   )
